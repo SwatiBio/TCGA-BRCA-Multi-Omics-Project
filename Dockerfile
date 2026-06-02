@@ -1,19 +1,31 @@
-FROM rocker/shiny:4.3.2
+FROM rocker/shiny-verse:4.3.2
 
 RUN apt-get update && apt-get install -y \
-    libcurl4-openssl-dev \
-    libssl-dev \
     libxml2-dev \
     libfontconfig1-dev \
     libcairo2-dev \
     libxt-dev \
-    libharfbuzz-dev \
-    libfribidi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dashboard_app /srv/shiny-server
 
-RUN Rscript -e "options(repos = c(CRAN = 'https://packagemanager.posit.co/cran/__linux__/jammy/latest'), install.packages.check.source = 'no'); source('/srv/shiny-server/packages.R')"
+RUN Rscript -e "
+options(repos = c(CRAN = 'https://packagemanager.posit.co/cran/__linux__/jammy/latest'), install.packages.check.source = 'no');
+
+pkgs <- c('bs4Dash', 'shinyjs', 'plotly', 'DT', 'survminer', 'umap');
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+  }
+}
+
+if (!requireNamespace('BiocManager', quietly = TRUE)) {
+  install.packages('BiocManager', repos = 'https://cloud.r-project.org')
+}
+if (!requireNamespace('MultiAssayExperiment', quietly = TRUE)) {
+  BiocManager::install('MultiAssayExperiment', update = FALSE, ask = FALSE)
+}
+"
 
 EXPOSE 7860
 
