@@ -99,6 +99,25 @@ ui <- bs4DashPage(
       tags$script(HTML("
         document.addEventListener('DOMContentLoaded', function() {
           document.body.classList.add('sidebar-mini');
+          var storyPage = document.getElementById('story-page');
+          var dashPage = document.getElementById('dashboard-page');
+          function showStory() {
+            dashPage.style.display = 'none';
+            storyPage.style.display = 'block';
+            window.scrollTo(0, 0);
+          }
+          function showDashboard() {
+            storyPage.style.display = 'none';
+            dashPage.style.display = 'block';
+            window.scrollTo(0, 0);
+          }
+          document.querySelector('.sidebar-menu').addEventListener('click', function(e) {
+            var item = e.target.closest('.nav-link');
+            if (!item) return;
+            var val = item.getAttribute('data-value');
+            if (val === 'story') showStory();
+            else if (val) showDashboard();
+          });
         });
         var sidebar = document.querySelector('.main-sidebar');
         if (sidebar) {

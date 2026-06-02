@@ -1,2 +1,2 @@
-options(shiny.host = "0.0.0.0", shiny.port = 7860)
-shiny::runApp("/srv/shiny-server", launch.browser = FALSE)
+port <- as.integer(Sys.getenv("PORT", "7860"))
+shiny::runApp("/srv/shiny-server", host = "0.0.0.0", port = port, launch.browser = FALSE)
