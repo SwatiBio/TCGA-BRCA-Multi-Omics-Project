@@ -52,7 +52,23 @@ RUN Rscript -e "\
     q(status=1, save='no'); \
   })"
 
-
+# Test server function in mock session (catches initialization crashes)
+RUN Rscript -e "\
+  setwd('/srv/shiny-server'); \
+  source('app.R', local=TRUE); \
+  cat('=== TESTING SERVER FUNCTION ===\n'); \
+  tryCatch({ \
+    shiny::testServer(server, { \
+      cat('INSIDE testServer: rv selected_factor =', rv[['selected_factor']], '\n'); \
+      cat('INSIDE testServer: cox_data rows =', nrow(rv[['cox_data']]), '\n'); \
+      cat('=== SERVER FUNCTION REACTIVE VALUES OK ===\n'); \
+    }); \
+    cat('=== testServer COMPLETED SUCCESSFULLY ===\n'); \
+  }, error = function(e) { \
+    cat('!!! testServer FAILED:', conditionMessage(e), '\n'); \
+    cat('!!! Full error:', capture.output(str(e)), '\n'); \
+    q(status=1, save='no'); \
+  })"
 
 EXPOSE 7860
 
