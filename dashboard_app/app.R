@@ -11,7 +11,6 @@
 
 # ---- 0. PACKAGES ----
 # Install any missing with: install.packages(c("shiny","bs4Dash","shinyjs","plotly","DT","dplyr","survival","survminer","ggplot2"))
-cat("DIAG: sourcing app.R\n")
 library(shiny)
 library(bs4Dash)
 library(shinyjs)
@@ -26,13 +25,10 @@ library(umap)
 # ---- 1. LOAD DATA ----
 data_dir <- if (dir.exists("data")) "data" else file.path(dirname(getwd()), "dashboard_app/data")
 
-cat("DIAG: data_dir =", data_dir, "\n")
-cat("DIAG: dir.exists(data) =", dir.exists("data"), "\n")
-cat("DIAG: dir.exists(/app/data) =", dir.exists("/app/data"), "\n")
+
 
 tryCatch({
   patient_data <- read.csv(file.path(data_dir, "patient_data.csv"), row.names = 1)
-  cat("DIAG: patient_data loaded OK,", nrow(patient_data), "rows\n")
 }, error = function(e) cat("DIAG ERROR patient_data:", e$message, "\n"))
 
 # Auto-compute UMAP if missing (so the patient map always works)
@@ -50,47 +46,38 @@ if (exists("patient_data") && !"umap_x" %in% colnames(patient_data)) {
 
 tryCatch({
   cox_os <- read.csv(file.path(data_dir, "cox_os.csv"))
-  cat("DIAG: cox_os loaded OK,", nrow(cox_os), "rows\n")
 }, error = function(e) cat("DIAG ERROR cox_os:", e$message, "\n"))
 
 tryCatch({
   cox_adjusted <- read.csv(file.path(data_dir, "cox_adjusted_clinical_os.csv"))
-  cat("DIAG: cox_adjusted loaded OK\n")
 }, error = function(e) cat("DIAG ERROR cox_adjusted:", e$message, "\n"))
 
 tryCatch({
   var_summary <- read.csv(file.path(data_dir, "factor_variance_summary.csv"))
-  cat("DIAG: var_summary loaded OK\n")
 }, error = function(e) cat("DIAG ERROR var_summary:", e$message, "\n"))
 
 tryCatch({
   rmst <- read.csv(file.path(data_dir, "rmst_per_factor.csv"))
-  cat("DIAG: rmst loaded OK\n")
 }, error = function(e) cat("DIAG ERROR rmst:", e$message, "\n"))
 
 tryCatch({
   top_features <- read.csv(file.path(data_dir, "top_features_per_factor.csv"))
-  cat("DIAG: top_features loaded OK\n")
 }, error = function(e) cat("DIAG ERROR top_features:", e$message, "\n"))
 
 tryCatch({
   factor_desc <- read.csv(file.path(data_dir, "factor_descriptions.csv"))
-  cat("DIAG: factor_desc loaded OK\n")
 }, error = function(e) cat("DIAG ERROR factor_desc:", e$message, "\n"))
 
 tryCatch({
   ref_km <- read.csv(file.path(data_dir, "reference_km.csv"))
-  cat("DIAG: ref_km loaded OK\n")
 }, error = function(e) cat("DIAG ERROR ref_km:", e$message, "\n"))
 
 tryCatch({
   baseline_surv <- read.csv(file.path(data_dir, "baseline_survival.csv"))
-  cat("DIAG: baseline_surv loaded OK\n")
 }, error = function(e) cat("DIAG ERROR baseline_surv:", e$message, "\n"))
 
 tryCatch({
   cox_multi <- readRDS(file.path(data_dir, "cox_multi.rds"))
-  cat("DIAG: cox_multi loaded OK\n")
 }, error = function(e) cat("DIAG ERROR cox_multi:", e$message, "\n"))
 
 factor_names <- paste0("Factor", 1:15)
@@ -773,7 +760,6 @@ ui <- bs4DashPage(
 
 # ---- 3. SERVER ----
 server <- function(input, output, session) {
-  cat("DIAG: server function called (session started)\n")
   
   # -- SCROLL ANIMATIONS --
   runjs("
@@ -1686,6 +1672,4 @@ server <- function(input, output, session) {
 }
 
 # ---- 4. RUN ----
-cat("DIAG: calling shinyApp(ui, server)\n")
 shinyApp(ui, server)
-cat("DIAG: after shinyApp - should not print (blocking)\n")
