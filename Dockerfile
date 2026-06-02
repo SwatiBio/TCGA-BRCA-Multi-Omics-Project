@@ -9,11 +9,24 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dev httpuv for WebSocket reliability
-RUN Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org')" \
-    && Rscript -e "remotes::install_github('rstudio/httpuv', upgrade = 'never')"
+RUN installGithub.r rstudio/httpuv
 
-COPY install_packages.R /tmp/install_packages.R
-RUN Rscript /tmp/install_packages.R
+# Install CRAN packages
+RUN install2.r --error --skipinstalled \
+    bs4Dash \
+    shinyjs \
+    plotly \
+    DT \
+    survminer \
+    umap
+
+# Install Bioc packages
+RUN Rscript -e "
+    if (!requireNamespace('BiocManager', quietly=TRUE))
+        install.packages('BiocManager', repos='https://cloud.r-project.org');
+    if (!requireNamespace('MultiAssayExperiment', quietly=TRUE))
+        BiocManager::install('MultiAssayExperiment', update=FALSE, ask=FALSE)
+"
 
 COPY dashboard_app /srv/shiny-server
 COPY shiny-server.conf /etc/shiny-server/shiny-server.conf

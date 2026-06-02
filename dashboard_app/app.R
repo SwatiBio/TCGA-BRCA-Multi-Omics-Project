@@ -1,4 +1,3 @@
-
 # ====================================================================
 # BRCA Omics Story — Interactive Dashboard
 # Combines: Scrollytelling + Mind Map + Factor Explorer + Simulator
@@ -8,7 +7,6 @@
 #   2. Open this file in RStudio
 #   3. Click "Run App" (or run: shiny::runApp())
 # ====================================================================
-
 # ---- 0. PACKAGES ----
 # Install any missing with: install.packages(c("shiny","bs4Dash","shinyjs","plotly","DT","dplyr","survival","survminer","ggplot2"))
 library(shiny)
@@ -21,16 +19,11 @@ library(survival)
 library(survminer)
 library(ggplot2)
 library(umap)
-
 # ---- 1. LOAD DATA ----
 data_dir <- if (dir.exists("data")) "data" else file.path(dirname(getwd()), "dashboard_app/data")
-
-
-
 tryCatch({
   patient_data <- read.csv(file.path(data_dir, "patient_data.csv"), row.names = 1)
 }, error = function(e) cat("DIAG ERROR patient_data:", e$message, "\n"))
-
 # Auto-compute UMAP if missing (so the patient map always works)
 if (exists("patient_data") && !"umap_x" %in% colnames(patient_data)) {
   cat("Computing UMAP from factor scores...\n")
@@ -43,47 +36,35 @@ if (exists("patient_data") && !"umap_x" %in% colnames(patient_data)) {
     cat("  UMAP computed and saved to patient_data.csv\n")
   }
 }
-
 tryCatch({
   cox_os <- read.csv(file.path(data_dir, "cox_os.csv"))
 }, error = function(e) cat("DIAG ERROR cox_os:", e$message, "\n"))
-
 tryCatch({
   cox_adjusted <- read.csv(file.path(data_dir, "cox_adjusted_clinical_os.csv"))
 }, error = function(e) cat("DIAG ERROR cox_adjusted:", e$message, "\n"))
-
 tryCatch({
   var_summary <- read.csv(file.path(data_dir, "factor_variance_summary.csv"))
 }, error = function(e) cat("DIAG ERROR var_summary:", e$message, "\n"))
-
 tryCatch({
   rmst <- read.csv(file.path(data_dir, "rmst_per_factor.csv"))
 }, error = function(e) cat("DIAG ERROR rmst:", e$message, "\n"))
-
 tryCatch({
   top_features <- read.csv(file.path(data_dir, "top_features_per_factor.csv"))
 }, error = function(e) cat("DIAG ERROR top_features:", e$message, "\n"))
-
 tryCatch({
   factor_desc <- read.csv(file.path(data_dir, "factor_descriptions.csv"))
 }, error = function(e) cat("DIAG ERROR factor_desc:", e$message, "\n"))
-
 tryCatch({
   ref_km <- read.csv(file.path(data_dir, "reference_km.csv"))
 }, error = function(e) cat("DIAG ERROR ref_km:", e$message, "\n"))
-
 tryCatch({
   baseline_surv <- read.csv(file.path(data_dir, "baseline_survival.csv"))
 }, error = function(e) cat("DIAG ERROR baseline_surv:", e$message, "\n"))
-
 tryCatch({
   cox_multi <- readRDS(file.path(data_dir, "cox_multi.rds"))
 }, error = function(e) cat("DIAG ERROR cox_multi:", e$message, "\n"))
-
 factor_names <- paste0("Factor", 1:15)
 cox_coefs <- coef(cox_multi)
-
-
 # ---- 2. UI ----
 ui <- bs4DashPage(
   help = NULL,
@@ -250,7 +231,6 @@ ui <- bs4DashPage(
         )
       )
     ),
-    
     # ---- DASHBOARD PAGE ----
     div(id = "dashboard-page",
       tabItems(
@@ -332,7 +312,6 @@ ui <- bs4DashPage(
             )
           )
         ),
-        
         # ---- PATIENT MAP ----
         tabItem(
           tabName = "map",
@@ -387,7 +366,6 @@ ui <- bs4DashPage(
             )
           )
         ),
-        
         # ---- GENE EXPLORER ----
         tabItem(
           tabName = "genes",
@@ -459,7 +437,6 @@ ui <- bs4DashPage(
             )
           ),
         ),
-
         # ---- SURVIVAL SIMULATOR ----
         tabItem(
           tabName = "simulator",
@@ -540,7 +517,6 @@ ui <- bs4DashPage(
             )
           )
         ),
-        
         # ---- ANALYSIS FLOW ----
         tabItem(
           tabName = "flow",
@@ -551,7 +527,6 @@ ui <- bs4DashPage(
                   "Analysis Flow: The complete analysis pipeline from raw data to survival prediction. Each step is described below with key details."))
             )
           ),
-          
           # STEP 1: Data
           fluidRow(
             column(12,
@@ -578,7 +553,6 @@ ui <- bs4DashPage(
               )
             )
           ),
-          
           # Step 2: Preprocessing
           fluidRow(
             column(12,
@@ -597,7 +571,6 @@ ui <- bs4DashPage(
               )
             )
           ),
-          
           # Step 3: MOFA2
           fluidRow(
             column(12,
@@ -637,7 +610,6 @@ ui <- bs4DashPage(
               )
             )
           ),
-          
           # Step 4: Survival Analysis
           fluidRow(
             column(12,
@@ -667,7 +639,6 @@ ui <- bs4DashPage(
               )
             )
           ),
-          
           # Step 5: Key Findings
           fluidRow(
             column(12,
@@ -699,7 +670,6 @@ ui <- bs4DashPage(
             )
           )
         ),
-        
         # ---- ABOUT ----
         tabItem(
           tabName = "about",
@@ -757,10 +727,8 @@ ui <- bs4DashPage(
     right = "Built with R/Shiny"
   )
 )
-
 # ---- 3. SERVER ----
 server <- function(input, output, session) {
-  
   # -- SCROLL ANIMATIONS --
   runjs("
     // Story scroll reveal
@@ -772,7 +740,6 @@ server <- function(input, output, session) {
       });
     }, { threshold: 0.25 });
     document.querySelectorAll('.story-content').forEach(el => storyObserver.observe(el));
-
     // Tooltip: position fixed on hover
     document.querySelectorAll('.factor-card').forEach(card => {
       const tooltip = card.querySelector('.card-tooltip');
@@ -794,7 +761,6 @@ server <- function(input, output, session) {
         tooltip.style.opacity = '0';
       });
     });
-
     // Simulator count-up animation
     function animateCountUp(el, target, suffix) {
       const numericTarget = parseFloat(target);
@@ -814,7 +780,6 @@ server <- function(input, output, session) {
         }
       }, stepTime);
     }
-
     Shiny.addCustomMessageHandler('animate-sim-results', function(msg) {
       requestAnimationFrame(function() {
         const el5 = document.getElementById('sim_5yr_surv');
@@ -826,21 +791,17 @@ server <- function(input, output, session) {
       });
     });
   ")
-  
   # -- REACTIVE VALUES --
   rv <- reactiveValues(
     selected_factor = "Factor5",
     cox_data = cox_os
   )
-
   observeEvent(input$selected_factor, {
     rv$selected_factor <- input$selected_factor
   })
-  
   observeEvent(input$cox_type, {
     rv$cox_data <- if (input$cox_type == "adj") cox_adjusted else cox_os
   })
-
   # -- "HOW WAS THIS CALCULATED?" MODALS --
   observeEvent(input$showCalc_km, {
     showModal(modalDialog(title = "How This Was Calculated", size = "l", easyClose = TRUE,
@@ -858,7 +819,6 @@ server <- function(input, output, session) {
       footer = modalButton("Got it")
     ))
   })
-
   observeEvent(input$showCalc_map, {
     showModal(modalDialog(title = "How This Was Calculated", size = "l", easyClose = TRUE,
       h4("UMAP Projection"),
@@ -874,7 +834,6 @@ server <- function(input, output, session) {
       footer = modalButton("Got it")
     ))
   })
-
   observeEvent(input$showCalc_gene, {
     showModal(modalDialog(title = "How This Was Calculated", size = "l", easyClose = TRUE,
       h4("Expression vs Factor 5 Score"),
@@ -890,10 +849,8 @@ server <- function(input, output, session) {
       footer = modalButton("Got it")
     ))
   })
-
   # -- RECENT HISTORY --
   history <- reactiveValues(entries = list())
-
   track_action <- function(action_type, detail) {
     entry <- list(
       type = action_type, detail = detail, time = Sys.time(),
@@ -903,17 +860,14 @@ server <- function(input, output, session) {
     )
     history$entries <- c(list(entry), head(history$entries, 19))
   }
-
   observeEvent(input$selected_factor, {
     track_action("factor", paste("Explored", input$selected_factor))
   }, ignoreInit = TRUE)
-
   observeEvent(input$gene_search, {
     if (nchar(input$gene_search) > 0) {
       track_action("gene", paste("Searched gene:", input$gene_search))
     }
   }, ignoreInit = TRUE)
-
   output$recentHistory <- renderUI({
     req(length(history$entries) > 0)
     tags$div(lapply(seq_along(history$entries), function(i) {
@@ -927,19 +881,16 @@ server <- function(input, output, session) {
       )
     }))
   })
-  
   # -- FACTOR EXPLORER --
   selected_cox <- reactive({
     df <- rv$cox_data
     df[df$Factor == rv$selected_factor, ]
   })
-  
   output$factor_summary_card <- renderUI({
     f <- rv$selected_factor
     fnum <- as.numeric(gsub("Factor", "", f))
     desc <- factor_desc[factor_desc$factor == f, ]
     ve <- var_summary[var_summary$Factor == f, ]
-    
     div(class = "factor-card card-analysis",
       div(class = "factor-title", f),
       div(style = "color:#64748b;font-size:0.9rem;margin:5px 0;",
@@ -958,17 +909,14 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   output$factor_cox_card <- renderUI({
     cox_row <- selected_cox()
     hr <- round(cox_row$HR, 2)
     pval <- cox_row$p_value
     ci <- paste0("[", round(cox_row$CI_lower, 2), " – ", round(cox_row$CI_upper, 2), "]")
-    
     is_protective <- hr < 1
     color_class <- if (is_protective) "protective" else "risk"
     icon <- if (is_protective) "🛡️" else "⚠️"
-    
     div(class = paste("factor-card card-analysis", color_class),
       div(class = "factor-title", paste(icon, "Hazard Ratio")),
       div(class = "factor-hr", hr),
@@ -990,13 +938,11 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   output$factor_rmst_card <- renderUI({
     rmst_row <- rmst[rmst$Factor == rv$selected_factor, ]
     diff <- round(rmst_row$RMST_Diff_Days, 1)
     pval <- rmst_row$P_value
     ci <- paste0("[", round(rmst_row$CI_lower, 1), ", ", round(rmst_row$CI_upper, 1), "]")
-    
     div(class = "factor-card card-analysis",
       div(class = "factor-title", "📊 RMST Difference"),
       div(class = "factor-hr", paste0(ifelse(diff > 0, "+", ""), diff, "d")),
@@ -1018,7 +964,6 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   filtered_data <- reactive({
     if (input$subtypeFilter) {
       patient_data[patient_data$subtype == "Basal", ]
@@ -1026,7 +971,6 @@ server <- function(input, output, session) {
       patient_data
     }
   })
-  
   output$riskPercentile <- renderUI({
     if (!"risk_percentile" %in% colnames(patient_data)) {
       return(div(class = "factor-card card-prognosis", style = "background:#f8fafc;",
@@ -1047,7 +991,6 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   output$surv3yr <- renderUI({
     if (!"surv_3yr" %in% colnames(patient_data)) {
       return(div(class = "factor-card card-prognosis", style = "background:#f8fafc;",
@@ -1068,7 +1011,6 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   output$factor_km_plot <- renderPlotly({
     f <- rv$selected_factor
     dat <- filtered_data()
@@ -1081,7 +1023,6 @@ server <- function(input, output, session) {
     )
     fit <- survfit(Surv(os_time, os_event) ~ group, data = temp_df)
     s <- summary(fit)
-    
     plot_df <- data.frame(
       time = s$time,
       surv = s$surv,
@@ -1090,7 +1031,6 @@ server <- function(input, output, session) {
       group = as.character(s$strata)
     )
     plot_df$group <- sub("^group=", "", plot_df$group)
-    
     plot_ly(plot_df, x = ~time, y = ~surv, color = ~group,
             colors = c("#6B8F5E", "#B85450"),
             type = "scatter", mode = "lines",
@@ -1108,12 +1048,10 @@ server <- function(input, output, session) {
         legend = list(title = list(text = f))
       )
   })
-  
   output$forestPlot <- renderPlot({
     cox <- cox_os
     cox$Factor <- factor(cox$Factor, levels = cox$Factor[order(cox$HR)])
     cox$Significant <- ifelse(cox$p_value < 0.05, "p < 0.05", "p >= 0.05")
-
     ggplot(cox, aes(x = HR, y = Factor, color = Significant)) +
       geom_point(size = 3) +
       geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), height = 0.2) +
@@ -1134,10 +1072,8 @@ server <- function(input, output, session) {
             legend.position = "bottom",
             axis.text.y = element_text(size = 11))
   }, res = 120)
-
   output$factor_clinical_box <- renderUI({
     f <- rv$selected_factor
-    
     # ---- Pre-compute all factor values for dynamic lookup ----
     hr_all <- setNames(round(cox_os$HR, 2), cox_os$Factor)
     ci_l_all <- setNames(round(cox_os$CI_lower, 2), cox_os$Factor)
@@ -1149,24 +1085,20 @@ server <- function(input, output, session) {
     vrna_all <- setNames(round(var_summary$RNA, 1), var_summary$Factor)
     vmeth_all <- setNames(round(var_summary$Methyl, 1), var_summary$Factor)
     vrppa_all <- setNames(round(var_summary$RPPA, 1), var_summary$Factor)
-    
     fmt_p <- function(x) {
       if (is.na(x)) return("NA")
       if (x < 0.001) return("p < 0.001")
       if (x < 0.01) return(paste0("p = ", sprintf("%.3f", x)))
       return(paste0("p = ", sprintf("%.2f", x)))
     }
-    
     # ---- Badge for current factor ----
     hr <- hr_all[f]
     pv <- pv_all[f]
     rdiff <- rdiff_all[f]
     rpv <- rpv_all[f]
-    
     is_prot <- hr < 0.9 & pv < 0.1
     is_risk <- hr > 1.1 & pv < 0.1
     is_delayed <- abs(rdiff) > 50 & rpv < 0.1 & !is_prot & !is_risk
-    
     badge <- if (is_prot) {
       list(text = "PROTECTIVE", bg = "#059669")
     } else if (is_risk) {
@@ -1176,7 +1108,6 @@ server <- function(input, output, session) {
     } else {
       list(text = "NEUTRAL", bg = "#6b7280")
     }
-    
     # ---- Factor-specific narrative ----
     clinical_notes <- list(
       "Factor1" = list(
@@ -1300,7 +1231,6 @@ server <- function(input, output, session) {
         bottom = "A methylation pattern linked to ER-positive disease with no prognostic impact. Likely represents epigenetic heterogeneity within ER+ breast cancers that does not affect clinical outcomes."
       )
     )
-    
     note <- clinical_notes[[f]]
     if (is.null(note)) {
       note <- list(
@@ -1312,9 +1242,7 @@ server <- function(input, output, session) {
         bottom = ""
       )
     }
-    
     div(id = "clinical-box", style = "background:#F5F7E8;border:1px solid #D5D8C8;border-radius:10px;padding:24px;",
-      
       # Header row: title + badge
       div(style = "display:flex;align-items:center;gap:12px;margin-bottom:4px;",
         h4(paste(f, "\u2014", note$subtitle), class = "mt-0 mb-0",
@@ -1323,10 +1251,8 @@ server <- function(input, output, session) {
              badge$text)
       ),
       tags$hr(style = "border-color:#D5D8C8;margin:12px 0;"),
-      
       # Summary paragraph
       p(style = "color:#1e293b;font-size:0.92rem;line-height:1.7;margin-bottom:14px;", note$summary),
-      
       # Two-column: Clinical Profile + Survival Impact
       div(style = "display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;",
         div(style = "background:#EBEED5;border-radius:8px;padding:14px;",
@@ -1340,14 +1266,12 @@ server <- function(input, output, session) {
           p(style = "margin:0;color:#1e293b;font-size:0.86rem;line-height:1.65;", note$survival)
         )
       ),
-      
       # Molecular Drivers
       div(style = "background:#EBEED5;border-radius:8px;padding:14px;margin-bottom:14px;",
         p(style = "margin:0 0 6px 0;font-weight:700;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.4px;color:#475569;",
           "Molecular Drivers"),
         p(style = "margin:0;color:#1e293b;font-size:0.86rem;line-height:1.65;", note$omics)
       ),
-      
       # Bottom line with colored accent bar
       div(style = paste0("background:", if (is_prot) "#ecfdf5" else if (is_risk) "#fef2f2" else "#EBEED5", ";border-left:4px solid ", badge$bg, ";border-radius:6px;padding:12px 16px;"),
         p(style = paste0("margin:0;color:", if (is_prot) "#065f46" else if (is_risk) "#991b1b" else "#475569", ";font-size:0.85rem;line-height:1.5;font-weight:500;"),
@@ -1355,7 +1279,6 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   # -- PATIENT MAP --
   output$patientMap <- renderPlot({
     req(input$mapColor)
@@ -1393,7 +1316,6 @@ server <- function(input, output, session) {
       plot.new(); text(0.5, 0.5, paste("Map error:", e$message), cex = 1.0, col = "#B85450")
     })
   })
-  
   output$mapSurvival <- renderPlot({
     if (!"umap_x" %in% colnames(patient_data)) {
       plot.new(); text(0.5, 0.5, "Map coordinates not available", cex = 1.2)
@@ -1423,17 +1345,14 @@ server <- function(input, output, session) {
       plot.new(); text(0.5, 0.5, paste("Survival error:", e$message), cex = 0.9, col = "#B85450")
     })
   })
-
   # -- GENE EXPLORER --
   observe({
     all_genes <- unique(unlist(strsplit(top_features$Top_Features, "; ")))
     updateSelectizeInput(session, "gene_search", choices = all_genes, server = TRUE)
   })
-  
   gene_factor <- reactive({
     gene <- input$gene_search
     if (is.null(gene) || gene == "") return(NULL)
-    
     results <- data.frame()
     for (f in factor_names) {
       feat_row <- top_features[top_features$Factor == f & top_features$View == "RNA", ]
@@ -1453,11 +1372,9 @@ server <- function(input, output, session) {
     }
     results
   })
-  
   output$gene_hr_badge <- renderUI({
     gf <- gene_factor()
     if (is.null(gf) || nrow(gf) == 0) return(NULL)
-    
     best <- gf[which.min(gf$pval), ]
     div(
       h5("Strongest Association:"),
@@ -1467,16 +1384,13 @@ server <- function(input, output, session) {
       )
     )
   })
-  
   output$gene_expression_plot <- renderPlotly({
     gene <- input$gene_search
     if (is.null(gene) || gene == "") return(NULL)
-    
     f5_score <- patient_data$Factor5
     set.seed(42)
     sim_expr <- f5_score * 0.3 + rnorm(length(f5_score), 0, 0.8)
     sim_expr <- scales::rescale(sim_expr, to = c(0, 15))
-    
     subtype <- patient_data$subtype
     subtype[subtype == ""] <- "Unknown"
     plot_df <- data.frame(
@@ -1484,7 +1398,6 @@ server <- function(input, output, session) {
       expression = sim_expr,
       subtype = subtype
     )
-    
     p <- ggplot(plot_df, aes(x = factor5, y = expression)) +
       geom_point(aes(color = subtype), alpha = 0.5, size = 1.5) +
       geom_smooth(method = "lm", color = "#7A70BA", se = TRUE, alpha = 0.2) +
@@ -1500,7 +1413,6 @@ server <- function(input, output, session) {
             plot.background = element_rect(fill = "#F5F7E8", color = NA),
             panel.background = element_rect(fill = "#ffffff", color = NA),
             legend.position = "bottom")
-    
     ggplotly(p, tooltip = c("x", "y", "color")) %>%
       layout(
         paper_bgcolor = "#F5F7E8",
@@ -1511,7 +1423,6 @@ server <- function(input, output, session) {
         legend = list(orientation = "h", y = -0.45, x = 0.5, xanchor = "center")
       )
   })
-  
   output$all_genes_table <- renderDT({
     datatable(top_features, options = list(
       pageLength = 50, lengthMenu = c(25, 50, 100),
@@ -1521,7 +1432,6 @@ server <- function(input, output, session) {
     ), rownames = FALSE) %>%
       formatStyle(columns = c("Factor", "View", "Top_Features"), fontSize = "85%")
   })
-  
   # -- SURVIVAL SIMULATOR --
   sim_profile <- reactive({
     scores <- sapply(c(5, 7, 8, 10, 13, 14), function(f) {
@@ -1530,14 +1440,12 @@ server <- function(input, output, session) {
     names(scores) <- paste0("Factor", c(5, 7, 8, 10, 13, 14))
     scores
   })
-  
   # Reset to average
   observeEvent(input$reset_sim, {
     for (f in c(5, 7, 8, 10, 13, 14)) {
       updateSliderInput(session, paste0("sim_f", f), value = 0)
     }
   })
-  
   # Protective profile
   observeEvent(input$sim_protective, {
     updateSliderInput(session, "sim_f5", value = 2)
@@ -1547,7 +1455,6 @@ server <- function(input, output, session) {
     updateSliderInput(session, "sim_f13", value = -0.5)
     updateSliderInput(session, "sim_f14", value = -1)
   })
-  
   # Risk profile
   observeEvent(input$sim_risky, {
     updateSliderInput(session, "sim_f5", value = -1.5)
@@ -1557,27 +1464,20 @@ server <- function(input, output, session) {
     updateSliderInput(session, "sim_f13", value = 1.5)
     updateSliderInput(session, "sim_f14", value = 2)
   })
-  
   # Compute predicted survival
   sim_prediction <- reactive({
     profile <- sim_profile()
-    
     full_scores <- setNames(rep(0, 15), factor_names)
     full_scores[names(profile)] <- profile
-    
     lp <- sum(cox_coefs * full_scores)
     hr <- exp(lp)
-    
     pred_surv <- baseline_surv$surv ^ exp(lp)
-    
     # 5-year survival
     idx_5yr <- which.min(abs(baseline_surv$time - 1825))
     surv_5yr <- pred_surv[idx_5yr]
-    
     # Median survival
     med_idx <- which(pred_surv <= 0.5)
     med_surv <- if (length(med_idx) > 0) baseline_surv$time[med_idx[1]] else NA
-    
     list(
       lp = lp,
       hr = hr,
@@ -1587,22 +1487,18 @@ server <- function(input, output, session) {
       median_surv = med_surv
     )
   })
-  
   output$sim_5yr_surv <- renderText({
     s <- sim_prediction()$surv_5yr
     paste0(round(s * 100, 1), "%")
   })
-  
   output$sim_median_surv <- renderText({
     m <- sim_prediction()$median_surv
     if (is.na(m)) ">1825" else as.character(round(m))
   })
-  
   output$sim_hr_display <- renderText({
     hr <- sim_prediction()$hr
     paste0(round(hr, 2), "×")
   })
-
   # Animate sim results on slider release
   observeEvent(sim_profile(), {
     pred <- sim_prediction()
@@ -1612,10 +1508,8 @@ server <- function(input, output, session) {
       hr_display = paste0(round(pred$hr, 2), "×")
     ))
   })
-  
   output$sim_km_plot <- renderPlotly({
     pred <- sim_prediction()
-    
     plot_df <- data.frame(
       time = pred$time,
       surv = pred$surv,
@@ -1627,7 +1521,6 @@ server <- function(input, output, session) {
       type = "Average Patient"
     )
     combined <- rbind(plot_df, ref_df)
-    
     p <- plot_ly() %>%
       add_lines(data = combined[combined$type == "Average Patient", ],
                 x = ~time, y = ~surv,
@@ -1650,17 +1543,14 @@ server <- function(input, output, session) {
         hovermode = "x unified",
         legend = list(x = 0.02, y = 0.02)
       )
-    
     # Add 5-year reference line
     p <- p %>%
       add_segments(x = 1825, xend = 1825, y = 0, yend = 1,
                    line = list(color = "#fbbf24", width = 1, dash = "dot"),
                    showlegend = FALSE,
                    hovertemplate = "5 years<extra></extra>")
-    
     p
   })
-  
   # -- SIDEBAR CONTROL --
   observeEvent(input$sidebar_menu, {
     if (input$sidebar_menu == "story") {
@@ -1670,6 +1560,5 @@ server <- function(input, output, session) {
     }
   })
 }
-
 # ---- 4. RUN ----
 shinyApp(ui, server)
