@@ -18,7 +18,10 @@ RUN install2.r --error --skipinstalled \
     plotly \
     DT \
     survminer \
-    umap
+    umap \
+    dplyr \
+    survival \
+    ggplot2
 
 # Install Bioc packages
 RUN Rscript -e "install.packages('BiocManager',repos='https://cloud.r-project.org');BiocManager::install('MultiAssayExperiment',update=FALSE,ask=FALSE)"
