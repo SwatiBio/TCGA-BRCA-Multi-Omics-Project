@@ -1,0 +1,1183 @@
+**Goal:** Integrate 4 omics layers (RNA-seq, DNA Methylation, CNV, RPPA Proteomics) from TCGA-BRCA using MOFA2 to discover multi-omics factors linked to survival.
+
+**Why breast cancer instead of lung?** BRCA has ~1100 patients (vs 370 in LUSC) = more statistical power. Breast cancer has well-defined molecular subtypes (LumA, LumB, HER2-E, Basal) that are clinically actionable. BRCA also has proteomics (RPPA) data not available for LUSC.
+
+**Working Directory:** `C:/Users/hp/Dev/playground/PO3` — all code assumes this is your working directory
+
+---
+
+## DAY 1 — Data Acquisition
+
+---
+
+## Step 0: Install Required R Packages
+
+```
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(c(
+    "MultiAssayExperiment", "MOFA2", "ggplot2", "ComplexHeatmap",
+    "dplyr", "tidyr", "tibble", "readr", "stringr",
+    "clusterProfiler", "org.Hs.eg.db", "enrichplot",
+    "survival", "survminer", "impute", "data.table",
+    "corrplot", "RColorBrewer", "UCSCXenaTools", "patchwork",
+    "glmnet", "ranger", "rms", "GEOquery"
+))
+```
+
+**🧠 What you're doing:** Installing all the R packages needed for the entire analysis — from data download to survival analysis.
+
+**🎯 Why:** These packages handle every step: `UCSCXenaTools` downloads data, `MOFA2` does the multi-omics integration, `survival/survminer` runs the survival models, and `glmnet/ranger/rms` are for advanced survival methods in Part 2.
+
+---
+
+## Step 1: Download TCGA-BRCA Data
+
+```
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(data.table)
+library(UCSCXenaTools)
+library(stringr)
+library(MultiAssayExperiment)
+
+# Download RNA, Methylation, CNV, RPPA, and Clinical data for BRCA
+downloadTCGA("BRCA", "Gene Expression RNASeq", "IlluminaHiSeq RNASeqV2 pancan normalized")
+downloadTCGA("BRCA", "DNA Methylation", "Methylation450K")
+downloadTCGA("BRCA", "Gene Level Copy Number", "Gistic2")
+downloadTCGA("BRCA", "Protein Expression", "RPPA")
+downloadTCGA("BRCA", "Phenotype", "Clinical Information")
+
+cat("Downloads initiated. Files save to Data/TCGA.BRCA.sampleMap/\n")
+```
+
+**🧠 What you're doing:** Downloading 5 types of data for ~1100 breast cancer patients from UCSC Xena — gene expression (RNA), DNA methylation, copy number alterations (CNV), protein expression (RPPA), and clinical information (survival, stage, etc.).
+
+**🎯 Why:** MOFA2 needs multiple data layers from the SAME patients to find coordinated patterns. Each omics layer captures a different biological angle: RNA = what genes are active, Methylation = which genes are silenced, CNV = which genes are gained/lost, RPPA = which proteins are actually present.
+
+---
+
+## Step 1.1: Load Raw Data into R
+
+```
+rna_data <- fread("Data/TCGA.BRCA.sampleMap/HiSeqV2_PANCAN.gz")
+rna_mat <- as.matrix(rna_data[, -1]); rownames(rna_mat) <- rna_data$sample
+
+meth_data <- fread("Data/TCGA.BRCA.sampleMap/HumanMethylation450.gz")
+meth_mat <- as.matrix(meth_data[, -1]); rownames(meth_mat) <- meth_data$sample
+
+cnv_data <- fread("Data/TCGA.BRCA.sampleMap/Gistic2_CopyNumber_Gistic2_all_data_by_genes.gz")
+cnv_mat <- as.matrix(cnv_data[, -1]); rownames(cnv_mat) <- cnv_data$sample
+
+rppa_file <- list.files("Data/TCGA.BRCA.sampleMap/", pattern="RPPA", full.names=TRUE)
+rppa_data <- fread(rppa_file[1])
+rppa_mat <- as.matrix(rppa_data[, -1]); rownames(rppa_mat) <- rppa_data$sample
+
+clinical <- fread("Data/TCGA.BRCA.sampleMap/BRCA_clinicalMatrix")
+
+cat("RNA-seq:", dim(rna_mat), "\nMethylation:", dim(meth_mat), "\nCNV:", dim(cnv_mat), "\nRPPA:", dim(rppa_mat), "\nClinical:", dim(clinical), "\n")
+```
+
+**🧠 What you're doing:** Loading the downloaded files into R as matrices. Each becomes a table where rows are genes/probes/proteins and columns are patient samples.
+
+**🎯 Why:** MOFA2 needs numeric matrices, not raw files. Loading them into R is the first step before cleaning and aligning them.
+
+---
+
+## Step 1.2: Find Overlapping Patients Across All 4 Omics
+
+```
+extract_patient_id <- function(barcodes) str_sub(barcodes, 1, 12)
+
+patients_rna <- extract_patient_id(colnames(rna_mat))
+patients_meth <- extract_patient_id(colnames(meth_mat))
+patients_cnv <- extract_patient_id(colnames(cnv_mat))
+patients_rppa <- extract_patient_id(colnames(rppa_mat))
+
+common_patients <- Reduce(intersect, list(
+    unique(patients_rna), unique(patients_meth),
+    unique(patients_cnv), unique(patients_rppa)
+))
+
+cat("RNA-seq patients:", length(unique(patients_rna)), "\n")
+cat("Methylation patients:", length(unique(patients_meth)), "\n")
+cat("CNV patients:", length(unique(patients_cnv)), "\n")
+cat("RPPA patients:", length(unique(patients_rppa)), "\n")
+cat("Patients with ALL 4 omics:", length(common_patients), "\n")
+```
+
+**🧠 What you're doing:** Finding which patients have data in ALL 4 omics layers simultaneously. TCGA has some patients with RNA but no RPPA, some with CNV but no methylation — we need the intersection.
+
+**🎯 Why:** MOFA2 requires the same patients across all data views. If a patient is missing one omics layer, they get excluded. With ~1100 total BRCA patients, expect ~700-800 with all 4 omics — still double the LUSC sample size.
+
+---
+
+## DAY 2 — Build MultiAssayExperiment
+
+---
+
+## Step 2.1: Filter & Impute Methylation
+
+```
+# Remove probes with >20% missing values
+missing_pct <- rowSums(is.na(meth_mat)) / ncol(meth_mat)
+meth_keep <- meth_mat[missing_pct < 0.2, ]
+
+# Impute remaining missing values with KNN
+library(impute)
+meth_imputed <- impute.knn(as.matrix(meth_keep), k = 10)$data
+
+cat("Methylation probes before:", nrow(meth_mat), "after filter+impute:", nrow(meth_imputed), "\n")
+```
+
+**🧠 What you're doing:** Removing bad methylation probes (too many missing values) and filling in the remaining gaps using similar probes' values (KNN imputation). Think of KNN as: "find the 10 most similar probes and average their values to fill the gap."
+
+**🎯 Why:** MOFA2 can't handle missing values. Methylation data often has ~5% missing values. We remove probes that are mostly missing, then intelligently fill the rest rather than throwing away whole patients.
+
+---
+
+## Step 2.2: Select Top Variable Features Per Omics
+
+```
+
+# RNA: keep top 8000 most variable genes
+gene_vars <- apply(rna_mat, 1, var, na.rm = TRUE)
+rna_top8k <- rna_mat[head(order(gene_vars, decreasing = TRUE), min(8000, length(gene_vars))), ]
+
+# Methylation: keep top 8000 most variable probes
+meth_vars <- apply(meth_imputed, 1, var, na.rm = TRUE)
+meth_top8k <- meth_imputed[head(order(meth_vars, decreasing = TRUE), min(8000, length(meth_vars))), ]
+
+# CNV: keep top 3000 most variable genes (CNV is less dense)
+cnv_vars <- apply(cnv_mat, 1, var, na.rm = TRUE)
+cnv_top3k <- cnv_mat[head(order(cnv_vars, decreasing = TRUE), min(3000, length(cnv_vars))), ]
+
+# RPPA: keep all (~200 proteins) — already low-dimensional
+cat("RNA:", nrow(rna_top8k), "Methyl:", nrow(meth_top8k), "CNV:", nrow(cnv_top3k), "RPPA:", nrow(rppa_mat), "
+")``
+
+**🧠 What you're doing:** Picking the most informative features from each data layer. Genes/probes that barely change across patients carry little information. RPPA has only ~200 proteins, so we keep them all. RNA and methylation are reduced to 8000, CNV to 3000.
+
+**🎯 Why:** MOFA2 training time scales with the number of features. 8000 genes + 8000 probes + 3000 CNV + 200 RPPA = ~19,200 features, which is manageable. Keeping everything (e.g., 20,000 genes) would be slow and noisy.
+
+---
+
+## Step 2.3: Align All Patients and Build MAE
+
+```
+deduplicate_by_patient <- function(mat) {
+    patient_ids <- extract_patient_id(colnames(mat))
+    dup_idx <- duplicated(patient_ids)
+    if (sum(dup_idx) > 0) cat("Removing", sum(dup_idx), "duplicate samples from", deparse(substitute(mat)), "\n")
+    mat[, !dup_idx, drop = FALSE]
+}
+
+rna_final <- deduplicate_by_patient(rna_top8k)
+meth_final <- deduplicate_by_patient(meth_top8k)
+cnv_final <- deduplicate_by_patient(cnv_top3k)
+rppa_final <- deduplicate_by_patient(rppa_mat)
+
+# Subset to common patients and align column order
+for (nm in c("rna_final", "meth_final", "cnv_final", "rppa_final")) {
+    mat <- get(nm)
+    pids <- extract_patient_id(colnames(mat))
+    assign(nm, mat[, pids %in% common_patients])
+}
+
+common_ordered <- sort(common_patients)
+align_by_patient <- function(mat, ref_order) {
+    pids <- extract_patient_id(colnames(mat))
+    mat[, order(match(pids, ref_order))]
+}
+
+rna_final  <- align_by_patient(rna_final, common_ordered)
+meth_final <- align_by_patient(meth_final, common_ordered)
+cnv_final  <- align_by_patient(cnv_final, common_ordered)
+rppa_final <- align_by_patient(rppa_final, common_ordered)
+
+# Remove duplicate feature names
+rna_final <- rna_final[!duplicated(rownames(rna_final)), ]
+meth_final <- meth_final[!duplicated(rownames(meth_final)), ]
+cnv_final <- cnv_final[!duplicated(rownames(cnv_final)), ]
+rppa_final <- rppa_final[!duplicated(rownames(rppa_final)), ]
+
+# Assign patient IDs as column names
+colnames(rna_final) <- extract_patient_id(colnames(rna_final))
+colnames(meth_final) <- extract_patient_id(colnames(meth_final))
+colnames(cnv_final) <- extract_patient_id(colnames(cnv_final))
+colnames(rppa_final) <- extract_patient_id(colnames(rppa_final))
+
+stopifnot(colnames(rna_final) == common_ordered)
+stopifnot(colnames(meth_final) == common_ordered)
+stopifnot(colnames(cnv_final) == common_ordered)
+stopifnot(colnames(rppa_final) == common_ordered)
+
+# Build MultiAssayExperiment
+assay_list <- list(
+    RNA = as.matrix(rna_final),
+    Methyl = as.matrix(meth_final),
+    CNV = as.matrix(cnv_final),
+    RPPA = as.matrix(rppa_final)
+)
+
+clinical_mat <- as.data.frame(clinical)
+clinical_ids <- extract_patient_id(clinical_mat[[1]])
+dup_idx <- duplicated(clinical_ids)
+clinical_mat <- clinical_mat[!dup_idx, , drop = FALSE]
+clinical_ids <- clinical_ids[!dup_idx]
+rownames(clinical_mat) <- clinical_ids
+clinical_mat <- clinical_mat[common_ordered, , drop = FALSE]
+
+mae <- MultiAssayExperiment(
+    experiments = ExperimentList(assay_list),
+    colData = DataFrame(clinical_mat)
+)
+
+saveRDS(mae, "Data/brca_mae.rds")
+summary(mae)
+cat("Final patient count:", ncol(mae), "\n")
+```
+
+**🧠 What you're doing:** Building a single organized R object (MultiAssayExperiment) that contains all 4 omics layers + clinical data, with every column matching the same patient. It's like a binder with 4 tabs, each tab sorted the same way.
+
+**🎯 Why:** The MAE is the standard format MOFA2 expects. By building it once and saving to `Data/brca_mae.rds`, you can reload it in any later session without repeating the alignment.
+
+---
+
+## Step 2.4: Preprocessing Summary
+
+```
+summary_df <- data.frame(
+    Step = c("Raw RNA-seq", "Raw Methylation", "Raw CNV", "Raw RPPA", "Raw Clinical",
+             "Methyl after filter", "RNA top 8k", "Methyl top 8k", "CNV top 3k",
+             "RNA final", "Methyl final", "CNV final", "RPPA final"),
+    Features = c(nrow(rna_mat), nrow(meth_mat), nrow(cnv_mat), nrow(rppa_mat), ncol(clinical),
+                 nrow(meth_imputed), nrow(rna_top8k), nrow(meth_top8k), nrow(cnv_top3k),
+                 nrow(rna_final), nrow(meth_final), nrow(cnv_final), nrow(rppa_final)),
+    Samples = c(ncol(rna_mat), ncol(meth_mat), ncol(cnv_mat), ncol(rppa_mat), nrow(clinical),
+                ncol(meth_imputed), ncol(rna_top8k), ncol(meth_top8k), ncol(cnv_top3k),
+                ncol(rna_final), ncol(meth_final), ncol(cnv_final), ncol(rppa_final))
+)
+summary_df <- rbind(summary_df,
+    data.frame(Step = paste0("Common patients: ", length(common_ordered)),
+               Features = NA, Samples = NA))
+
+cat("\n=== PREPROCESSING SUMMARY ===\n")
+print(summary_df, row.names = FALSE)
+write.csv(summary_df, "logs/preprocessing_summary.csv", row.names = FALSE)
+cat("Saved to logs/preprocessing_summary.csv\n")
+```
+
+---
+
+## DAY 3 — MOFA2 Training
+
+---
+
+## Step 3.1: Install mofapy2 (Python requirement)
+
+```
+system("\"C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe\" -m pip install mofapy2")
+```
+
+---
+
+## Step 3.2: Train MOFA Model
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(MOFA2)
+library(MultiAssayExperiment)
+
+mae <- readRDS("Data/brca_mae.rds")
+
+# Build named list of matrices from MAE
+assay_names <- names(experiments(mae))
+cat("Experiments:", assay_names, "\n")
+
+mofa_data <- list()
+for (nm in assay_names) {
+    mat <- as.matrix(assay(experiments(mae)[[nm]]))
+    dup <- duplicated(rownames(mat))
+    if (any(dup)) {
+        cat("Removing", sum(dup), "duplicate feature names from", nm, "\n")
+        mat <- mat[!dup, ]
+    }
+    mofa_data[[nm]] <- mat
+}
+
+cat("Data views:", names(mofa_data), "\n")
+cat("Features:", sapply(mofa_data, nrow), "\n")
+cat("Samples:", unique(sapply(mofa_data, ncol)), "\n")
+
+mofa_obj <- create_mofa(mofa_data)
+
+data_opts <- get_default_data_options(mofa_obj)
+model_opts <- get_default_model_options(mofa_obj)
+model_opts$num_factors <- 15
+model_opts$spikeslab_factors <- FALSE
+model_opts$ard_factors <- TRUE
+
+train_opts <- get_default_training_options(mofa_obj)
+train_opts$convergence_mode <- "fast"
+train_opts$maxiter <- 1000
+train_opts$seed <- 42
+
+mofa_obj <- prepare_mofa(mofa_obj, data_options = data_opts,
+                          model_options = model_opts,
+                          training_options = train_opts)
+
+dir.create("models", showWarnings = FALSE)
+mofa_trained <- run_mofa(mofa_obj, outfile = "models/brca_mofa2.hdf5")
+saveRDS(mofa_trained, "models/brca_mofa_trained.rds")
+cat("MOFA training complete. Model saved.\n")
+```
+
+**🧠 What you're doing:** Training the MOFA model — it's like running a "pattern detector" across all 4 omics simultaneously. MOFA finds 15 latent "factors," each representing a coordinated pattern (e.g., "these 200 genes go up, those 50 methylation sites go down, and this protein drops"). Each patient gets a score for each factor.
+
+**🎯 Why:** This is the core of the analysis. Instead of testing 8000 genes one at a time, MOFA compresses the data into 15 meaningful signals. Each factor might represent a biological process (immune response, cell cycle, hormone signaling) that we can then test for survival association.
+
+**⚠️ Expect this to take 15-30 minutes with ~700 patients and 4 omics layers.**
+
+---
+
+## Step 3.3: Inspect Training Convergence
+
+```
+elbo <- mofa_trained@training_stats$elbo
+elbo <- elbo[!is.na(elbo)]
+plot(elbo, type = "l", xlab = "Iteration", ylab = "ELBO",
+     main = "MOFA Convergence — should go up and plateau")
+
+plot_variance_explained(mofa_trained, plot_total = TRUE)
+```
+
+**🧠 What you're doing:** Two checks: (1) the convergence plot shows if the model finished learning (line should go up then flatten), (2) variance explained shows how much each factor captures from each omics layer.
+
+**🎯 Why:** If the line is still climbing at iteration 1000, you need more iterations. The variance plot tells you which factors are driven by RNA vs methylation vs RPPA — important for interpretation later.
+
+---
+
+## DAY 4 — Factor Interpretation
+
+---
+
+## Step 4.1: GO & KEGG Enrichment for Factor 1
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+
+weights_rna <- get_weights(mofa_trained, views = "RNA")[["RNA"]]
+factor1_genes <- names(sort(abs(weights_rna[,1]), decreasing = TRUE)[1:200])
+
+gene_entrez <- bitr(factor1_genes, fromType = "SYMBOL",
+                    toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+go_results <- enrichGO(gene = gene_entrez$ENTREZID, OrgDb = org.Hs.eg.db,
+                       ont = "BP", pAdjustMethod = "BH", pvalueCutoff = 0.05)
+kegg_results <- enrichKEGG(gene = gene_entrez$ENTREZID,
+                           organism = "hsa", pvalueCutoff = 0.05)
+
+dotplot(go_results, showCategory = 15) + ggtitle("Factor 1 — GO Biological Process")
+dotplot(kegg_results, showCategory = 15) + ggtitle("Factor 1 — KEGG Pathway")
+```
+
+**🧠 What you're doing:** Taking the top 200 genes most strongly linked to Factor 1 and asking: "What biological pathways are these genes involved in?" If they're enriched for "cell cycle," Factor 1 might be a proliferation factor. If "immune response," it's an immune factor.
+
+**🎯 Why:** This turns a statistical factor (which is just a number per patient) into a biological interpretation (e.g., "Factor 3 = estrogen response"). Knowing what each factor represents helps explain WHY it might predict survival.
+
+---
+
+## Step 4.2: View Top Weights for All Factors (RNA, Methyl, CNV, RPPA)
+
+```
+# Single factor
+plot_top_weights(mofa_trained, view = "RNA", factor = 1, nfeatures = 30)
+plot_top_weights(mofa_trained, view = "Methyl", factor = 1, nfeatures = 30)
+plot_top_weights(mofa_trained, view = "CNV", factor = 1, nfeatures = 30)
+plot_top_weights(mofa_trained, view = "RPPA", factor = 1, nfeatures = 30)
+
+# Save all factors to PDFs
+dir.create("Results", showWarnings = FALSE)
+views <- c("RNA", "Methyl", "CNV", "RPPA")
+for (f in 1:15) {
+    pdf(paste0("Results/brca_factor", f, "_plots.pdf"), width = 8.5, height = 11, onefile = TRUE)
+    for (v in views) {
+        p <- plot_top_weights(mofa_trained, view = v, factor = f, nfeatures = 30) +
+            ggtitle(paste(v, "— Factor", f))
+        print(p)
+    }
+    dev.off()
+    cat("Saved Results/brca_factor", f, "_plots.pdf (4 pages)\n", sep = "")
+}
+```
+
+---
+
+## DAY 5 — Survival Analysis
+
+---
+
+## Step 5.0: Reload Objects (run at start of any new R session)
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(survminer)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+cat("MAE:", length(experiments(mae)), "assays,", ncol(mae), "patients\n")
+```
+
+---
+
+## Step 5.1: Cox Regression — Overall Survival (OS)
+
+```
+factor_scores <- get_factors(mofa_trained)[[1]]
+colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+
+# Overall survival endpoints
+os_time <- as.numeric(ifelse(
+    clinical_mat$vital_status == "DECEASED",
+    clinical_mat$days_to_death,
+    clinical_mat$days_to_last_followup
+))
+os_event <- ifelse(clinical_mat$vital_status == "DECEASED", 1, 0)
+
+cat("OS — Deaths:", sum(os_event), "Censored:", sum(!os_event), "\n")
+
+cox_os <- data.frame()
+for (f in colnames(factor_scores)) {
+    fmla <- as.formula(paste0("Surv(os_time, os_event) ~ `", f, "`"))
+    cox <- coxph(fmla, data = data.frame(os_time, os_event, factor_scores))
+    s <- summary(cox)
+    cox_os <- rbind(cox_os, data.frame(
+        Factor = f, Endpoint = "OS",
+        HR = exp(coef(cox)), p_value = coef(s)[, "Pr(>|z|)"],
+        CI_lower = exp(confint(cox)[1]), CI_upper = exp(confint(cox)[2])
+    ))
+}
+cox_os$p_adj <- p.adjust(cox_os$p_value, method = "BH")
+write.csv(cox_os, "logs/cox_os.csv", row.names = FALSE)
+
+cat("\n=== COX RESULTS — OVERALL SURVIVAL ===\n")
+for (i in 1:nrow(cox_os)) {
+    cat(sprintf("%-10s HR=%5.3f [%5.3f-%5.3f]  p=%6.4f  adj=%6.4f\n",
+        cox_os$Factor[i], cox_os$HR[i], cox_os$CI_lower[i], cox_os$CI_upper[i],
+        cox_os$p_value[i], cox_os$p_adj[i]))
+}
+```
+
+**🧠 What you're doing:** Testing each of the 15 MOFA factors for association with how long patients live (overall survival). This is identical to the LUSC analysis — we look for factors where patients with high scores die sooner (HR > 1) or later (HR < 1).
+
+**🎯 Why:** Overall survival is the gold standard endpoint. With ~1100 patients (vs 370 in LUSC), we have more statistical power. More factors may reach significance. This is the first hurdle: if no factors predict OS, the deeper analyses in Part 2 become critical.
+
+---
+
+## Step 5.2: Cox Regression — Recurrence-Free Survival (RFS)
+
+```
+# Recurrence-free survival: time to recurrence or death, whichever comes first
+# TCGA may have days_to_recurrence or days_to_tumor_progression
+rfs_cols <- grep("recurrence|progression|recur|progres",
+                 names(clinical_mat), value = TRUE, ignore.case = TRUE)
+cat("RFS-related columns:", paste(rfs_cols, collapse = ", "), "\n")
+
+# Check which columns exist
+for (col in rfs_cols) {
+    vals <- clinical_mat[[col]]
+    cat(col, "- non-NA:", sum(!is.na(vals)), "\n")
+}
+
+# Best guess for RFS columns
+recur_time_col <- intersect(rfs_cols,
+    grep("days_to_recurrence|days_to_tumor_progression|recurrence_days|progression_days",
+         rfs_cols, value = TRUE, ignore.case = TRUE))
+
+recur_event_col <- intersect(rfs_cols,
+    grep("recurrence_status|progression_status|recurred|progressed",
+         rfs_cols, value = TRUE, ignore.case = TRUE))
+
+if (length(recur_time_col) > 0 && length(recur_event_col) > 0) {
+    rfs_time <- as.numeric(clinical_mat[[recur_time_col[1]]])
+    rfs_event <- as.numeric(clinical_mat[[recur_event_col[1]]])
+
+    # For patients without recurrence, use OS as censored time
+    na_rfs <- which(is.na(rfs_time))
+    rfs_time[na_rfs] <- os_time[na_rfs]
+    rfs_event[na_rfs] <- os_event[na_rfs]
+
+    cat("RFS — Events:", sum(rfs_event, na.rm = TRUE), "Censored:", sum(rfs_event == 0, na.rm = TRUE), "\n")
+
+    cox_rfs <- data.frame()
+    for (f in colnames(factor_scores)) {
+        fmla <- as.formula(paste0("Surv(rfs_time, rfs_event) ~ `", f, "`"))
+        cox <- coxph(fmla, data = data.frame(rfs_time, rfs_event, factor_scores))
+        s <- summary(cox)
+        cox_rfs <- rbind(cox_rfs, data.frame(
+            Factor = f, Endpoint = "RFS",
+            HR = exp(coef(cox)), p_value = coef(s)[, "Pr(>|z|)"],
+            CI_lower = exp(confint(cox)[1]), CI_upper = exp(confint(cox)[2])
+        ))
+    }
+    cox_rfs$p_adj <- p.adjust(cox_rfs$p_value, method = "BH")
+    write.csv(cox_rfs, "logs/cox_rfs.csv", row.names = FALSE)
+
+    cat("\n=== COX RESULTS — RECURRENCE-FREE SURVIVAL ===\n")
+    for (i in 1:nrow(cox_rfs)) {
+        cat(sprintf("%-10s HR=%5.3f [%5.3f-%5.3f]  p=%6.4f  adj=%6.4f\n",
+            cox_rfs$Factor[i], cox_rfs$HR[i], cox_rfs$CI_lower[i], cox_rfs$CI_upper[i],
+            cox_rfs$p_value[i], cox_rfs$p_adj[i]))
+    }
+} else {
+    cat("RFS columns not found. Available progression columns:\n")
+    print(rfs_cols)
+    cat("If RFS data unavailable, use OS only for all downstream analyses.\n")
+}
+```
+
+**🧠 What you're doing:** Testing the same 15 factors for recurrence-free survival — time until the cancer comes back or the patient dies. RFS is often more sensitive than OS because it captures earlier events.
+
+**🎯 Why:** Breast cancer has good long-term survival (many patients live 10+ years), so OS analysis may miss signals that affect early recurrence. RFS is the standard endpoint in breast cancer clinical trials. A factor predicting RFS but not OS is still biologically and clinically meaningful.
+
+---
+
+## Step 5.3: Kaplan-Meier Curve (for best OS factor + best RFS factor)
+
+```
+best_os <- cox_os$Factor[which.min(cox_os$p_value)]
+best_rfs <- if (exists("cox_rfs")) cox_rfs$Factor[which.min(cox_rfs$p_value)] else best_os
+
+for (label in c("OS", "RFS")) {
+    if (label == "OS") {
+        best <- best_os; time <- os_time; event <- os_event
+    } else {
+        best <- best_rfs; time <- rfs_time; event <- rfs_event
+    }
+
+    surv_data <- data.frame(time = time, event = event,
+                            score = factor_scores[, best])
+    surv_data$group <- ifelse(surv_data$score > median(surv_data$score, na.rm = TRUE),
+                              "High", "Low")
+    fit <- survfit(Surv(time, event) ~ group, data = surv_data)
+
+    p <- ggsurvplot(fit, data = surv_data, pval = TRUE, risk.table = TRUE,
+                    title = paste("KM Curve —", best, "(", label, ")"))
+
+    dir.create("figures", showWarnings = FALSE)
+    png(paste0("figures/km_", best, "_", label, ".png"),
+        width = 8, height = 6, units = "in", res = 300)
+    print(p)
+    dev.off()
+    cat("Saved figures/km_", best, "_", label, ".png\n", sep = "")
+}
+
+# Combined figure
+library(patchwork)
+p_varexp <- plot_variance_explained(mofa_trained, plot_total = TRUE)[[1]]
+p_scatter <- plot_factors(mofa_trained, factors = 1:2)
+ggsave("figures/combined_figure.png", p_varexp | p_scatter,
+       width = 10, height = 5, dpi = 300)
+cat("Saved figures/combined_figure.png\n")
+```
+
+**🧠 What you're doing:** Creating survival curves that split patients into "High" and "Low" factor score groups. The p-value from the log-rank test tells you if the two curves are significantly different. The risk table below shows how many patients remain at each timepoint.
+
+**🎯 Why:** A KM curve is the standard way to visualize survival differences. Even if a factor doesn't pass BH correction, the KM curve might show a clear separation that tells a compelling story. We save separate curves for OS and RFS because they may highlight different factors.
+
+---
+
+## PART 2 — Advanced Survival Analysis
+
+If any factors are significant after BH correction, skip to Part 2 to dig deeper. If none are significant (like LUSC), Part 2 is essential.
+
+---
+
+## Step 6.1: Enhanced Continuous Cox with LASSO + Clinical Adjustment + Multiple Splits
+
+### Why this step?
+
+Part 1 split patients into "High" vs "Low" with median cut — wasting information. Continuous scores preserve full signal. LASSO pre-filters to reduce multiple testing. Clinical covariates (age, stage) remove known survival effects so subtle factor signals can emerge. Extreme tertile splits maximize contrast.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(glmnet)
+library(ggplot2)
+library(survminer)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+
+factor_scores <- get_factors(mofa_trained)[[1]]
+colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+
+os_time <- as.numeric(ifelse(clinical_mat$vital_status=="DECEASED", clinical_mat$days_to_death, clinical_mat$days_to_last_followup))
+os_event <- ifelse(clinical_mat$vital_status=="DECEASED", 1, 0)
+
+# Clinical covariates
+age <- as.numeric(clinical_mat$age_at_diagnosis)
+stage_char <- clinical_mat$pathologic_stage
+stage <- ifelse(grepl("III|IV", stage_char), "Late", "Early")
+
+cat("OS — Deaths:", sum(os_event), "Censored:", sum(!os_event), "\n")
+
+# A: LASSO pre-filter
+set.seed(42)
+cv_lasso <- cv.glmnet(scale(factor_scores), Surv(os_time, os_event),
+                      family="cox", alpha=1, nfolds=10)
+selected_idx <- which(as.matrix(coef(cv_lasso, s="lambda.1se")) != 0)
+selected_factors <- names(selected_idx)
+cat("\nLASSO selected:", if(length(selected_factors) > 0) paste(selected_factors, collapse=", ") else "none at 1se, trying min")
+if (length(selected_factors) == 0) {
+    selected_idx <- which(as.matrix(coef(cv_lasso, s="lambda.min")) != 0)
+    selected_factors <- names(selected_idx)
+    cat(" (min):", paste(selected_factors, collapse=", "), "\n")
+}
+
+# B: Continuous Cox (all 15)
+cat("\n=== CONTINUOUS COX (OS) ===\n")
+results_os <- data.frame()
+for (f in paste0("Factor", 1:15)) {
+    fmla <- as.formula(paste0("Surv(os_time, os_event) ~ `", f, "`"))
+    cox <- coxph(fmla, data=data.frame(os_time, os_event, scale(factor_scores)))
+    s <- summary(cox)
+    results_os <- rbind(results_os, data.frame(Factor=f, HR=exp(coef(cox)),
+        p_value=coef(s)[,"Pr(>|z|)"], CI_lower=exp(confint(cox)[1]), CI_upper=exp(confint(cox)[2])))
+}
+results_os$p_adj <- p.adjust(results_os$p_value, method="BH")
+for (i in 1:nrow(results_os))
+    cat(sprintf("%-10s HR=%6.3f [%5.3f-%5.3f]  p=%6.4f  adj=%6.4f\n",
+        results_os$Factor[i], results_os$HR[i], results_os$CI_lower[i],
+        results_os$CI_upper[i], results_os$p_value[i], results_os$p_adj[i]))
+write.csv(results_os, "logs/cox_continuous_os.csv", row.names=FALSE)
+
+# C: Cox + clinical covariates
+cat("\n=== COX ADJUSTED FOR AGE + STAGE ===\n")
+clin_data <- data.frame(os_time, os_event, age=scale(age),
+    stage=factor(stage), scale(factor_scores))
+clin_data <- clin_data[complete.cases(clin_data), ]
+cat("With clinical data:", nrow(clin_data), "\n")
+
+results_adj <- data.frame()
+for (f in paste0("Factor", 1:15)) {
+    fmla <- as.formula(paste0("Surv(os_time, os_event) ~ `", f, "` + age + stage"))
+    cox <- tryCatch(coxph(fmla, data=clin_data), error=function(e) NULL)
+    if (is.null(cox)) next
+    s <- summary(cox)
+    results_adj <- rbind(results_adj, data.frame(Factor=f, HR=exp(coef(cox))[1],
+        p_value=coef(s)[1,"Pr(>|z|)"], CI_lower=exp(confint(cox))[f,1], CI_upper=exp(confint(cox))[f,2]))
+}
+results_adj$p_adj <- p.adjust(results_adj$p_value, method="BH")
+for (i in 1:nrow(results_adj))
+    cat(sprintf("%-10s HR=%6.3f [%5.3f-%5.3f]  p=%6.4f  adj=%6.4f\n",
+        results_adj$Factor[i], results_adj$HR[i], results_adj$CI_lower[i],
+        results_adj$CI_upper[i], results_adj$p_value[i], results_adj$p_adj[i]))
+write.csv(results_adj, "logs/cox_adjusted_clinical_os.csv", row.names=FALSE)
+
+# D: KM curves (median + extreme tertile for top 3)
+top3 <- results_os$Factor[order(results_os$p_value)][1:3]
+for (f in top3) {
+    med <- median(factor_scores[,f], na.rm=TRUE)
+    group <- ifelse(factor_scores[,f] > med, "High", "Low")
+    fit <- survfit(Surv(os_time, os_event) ~ group)
+    p <- ggsurvplot(fit, pval=TRUE, risk.table=TRUE,
+                    title=paste(f, "- median split (p=", round(results_os$p_value[results_os$Factor==f], 4), ")"))
+    png(paste0("figures/km_median_", f, ".png"), width=8, height=6, units="in", res=300); print(p); dev.off()
+}
+cat("Saved 3 median-split KM curves\n")
+
+# Extreme tertiles
+for (f in top3) {
+    q <- quantile(factor_scores[,f], c(1/3, 2/3), na.rm=TRUE)
+    group <- rep("Mid", length(factor_scores[,f]))
+    group[factor_scores[,f] <= q[1]] <- "Low"
+    group[factor_scores[,f] > q[2]] <- "High"
+    group <- factor(group, levels=c("Low","Mid","High"))
+    idx <- group != "Mid"
+    fit <- survfit(Surv(os_time[idx], os_event[idx]) ~ droplevels(group[idx]))
+    p <- ggsurvplot(fit, pval=TRUE, risk.table=TRUE, title=paste(f, "- extreme tertiles"))
+    png(paste0("figures/km_tertile_", f, ".png"), width=8, height=6, units="in", res=300); print(p); dev.off()
+}
+cat("Saved 3 extreme-tertile KM curves\n")
+```
+
+**🧠 What you're doing:** Four complementary approaches in one script: (A) LASSO picks the most promising factors, (B) continuous Cox uses full numeric scores, (C) adjusts for age and stage to remove noise, and (D/E) visualize the best factors with two split strategies.
+
+**🎯 Why:** LASSO reduces the 15 factors to a handful (fewer tests = more power). Clinical adjustment accounts for the fact that older patients and late-stage patients die faster regardless of biology. Extreme tertiles remove the middle 33% where signal is weakest — making the High vs Low contrast sharper.
+
+---
+
+## Step 6.2: Stratify by Molecular Subtype
+
+### Why this step?
+
+BRCA has 5 clinically distinct subtypes (LumA, LumB, HER2-E, Basal, Normal-like). They have different treatments, different prognoses, and different biology. A MOFA factor might predict survival only in Basal (triple-negative) patients but do nothing in LumA. Averaging across all subtypes dilutes the signal.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(survminer)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+
+# Find PAM50 subtype
+pam50_cols <- grep("pam50|PAM50|subtype|Subtype", names(clinical_mat), value=TRUE)
+cat("Potential subtype columns:\n")
+for (c in pam50_cols) {
+    cat(c, ":", paste(names(table(clinical_mat[[c]], useNA="ifany")), collapse=", "), "\n")
+}
+
+subtype <- clinical_mat[["BRCA_Subtype_PAM50"]] %||%
+           clinical_mat[["PAM50"]] %||%
+           clinical_mat[["Subtype"]] %||%
+           NULL
+
+if (is.null(subtype)) {
+    # If no PAM50 found, look for any column with ~5 breast-cancer-like levels
+    for (c in pam50_cols) {
+        v <- clinical_mat[[c]]
+        if (is.character(v) || is.factor(v)) {
+            v <- as.factor(v)
+            if (nlevels(v) >= 3 && nlevels(v) <= 6) {
+                subtype <- v; cat("Using:", c, "\n"); break
+            }
+        }
+    }
+}
+if (is.null(subtype)) stop("No subtype column found. Check the clinical matrix.")
+
+factor_scores <- get_factors(mofa_trained)[[1]]
+colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+
+os_time <- as.numeric(ifelse(clinical_mat$vital_status=="DECEASED", clinical_mat$days_to_death, clinical_mat$days_to_last_followup))
+os_event <- ifelse(clinical_mat$vital_status=="DECEASED", 1, 0)
+
+cox_data <- cbind(data.frame(os_time=os_time, os_event=os_event, subtype=subtype),
+                   data.frame(scale(factor_scores)))
+
+results <- data.frame()
+for (st in levels(as.factor(subtype))) {
+    idx <- which(cox_data$subtype == st)
+    n_events <- sum(cox_data$os_event[idx])
+    if (n_events < 5) { cat("Skipping", st, "- only", n_events, "events\n"); next }
+    cat("\n---", st, ":", length(idx), "patients,", n_events, "deaths ---\n")
+    for (f in paste0("Factor", 1:15)) {
+        fmla <- as.formula(paste0("Surv(os_time, os_event) ~ `", f, "`"))
+        cox <- tryCatch(coxph(fmla, data=cox_data[idx,]), error=function(e) NULL)
+        if (is.null(cox)) next
+        s <- summary(cox)
+        results <- rbind(results, data.frame(Subtype=st, Factor=f,
+            N=length(idx), Events=n_events, HR=exp(coef(cox)), p_value=coef(s)[,"Pr(>|z|)"],
+            CI_lower=exp(confint(cox)[1]), CI_upper=exp(confint(cox)[2])))
+    }
+}
+for (st in unique(results$Subtype)) {
+    idx <- which(results$Subtype == st)
+    results$p_adj[idx] <- p.adjust(results$p_value[idx], method="BH")
+}
+cat("\n=== SUBTYPE-STRATIFIED COX ===\n")
+print(results, row.names=FALSE)
+write.csv(results, "logs/cox_by_subtype.csv", row.names=FALSE)
+
+# KM for best finding
+best <- results[which.min(results$p_value),]
+cat(sprintf("\nBest: %s in %s — HR=%.3f, p=%.4f\n", best$Factor, best$Subtype, best$HR, best$p_value))
+surv_data <- data.frame(time=os_time, event=os_event, score=factor_scores[,best$Factor], subtype=subtype)
+surv_data$group <- ifelse(surv_data$score > median(surv_data$score, na.rm=TRUE), "High", "Low")
+fit <- survfit(Surv(time,event) ~ group, data=surv_data[surv_data$subtype==best$Subtype,])
+p <- ggsurvplot(fit, pval=TRUE, risk.table=TRUE, title=paste(best$Factor, "in", best$Subtype))
+dir.create("figures", showWarnings=FALSE)
+png(paste0("figures/km_", gsub(" ","_",best$Subtype), "_", best$Factor, ".png"), width=8, height=6, units="in", res=300)
+print(p); dev.off()
+```
+
+**🧠 What you're doing:** Running the same Cox regression separately within each breast cancer subtype. Instead of asking "Does Factor 5 predict survival across all patients?" you ask "Does Factor 5 predict survival specifically in triple-negative patients?"
+
+**🎯 Why:** Luminal A patients have excellent survival — very few deaths = no statistical power. Basal patients have poor survival — more events = more power. A subtype-specific signal that was lost in the full cohort (because LumA patients diluted it) can be discovered here.
+
+---
+
+## Step 6.3: Random Survival Forests
+
+### Why this step?
+
+Cox assumes a straight line: double the factor score = double the risk. Real biology has thresholds, plateaus, and interactions. RSF automatically handles these without you specifying them.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(ranger)
+library(ggplot2)
+library(survminer)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+
+factor_scores <- get_factors(mofa_trained)[[1]]
+colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+
+os_time <- as.numeric(ifelse(clinical_mat$vital_status=="DECEASED", clinical_mat$days_to_death, clinical_mat$days_to_last_followup))
+os_event <- ifelse(clinical_mat$vital_status=="DECEASED", 1, 0)
+
+rf_data <- data.frame(scale(factor_scores), time=os_time, status=os_event)
+rf_data <- rf_data[complete.cases(rf_data), ]
+cat("RSF:", nrow(rf_data), "patients,", sum(rf_data$status), "deaths\n")
+
+set.seed(42)
+rf <- ranger(Surv(time, status) ~ ., data=rf_data, num.trees=1000,
+             mtry=5, importance="permutation", min.node.size=10)
+
+vimp <- data.frame(Factor=names(rf$variable.importance), VIMP=rf$variable.importance)
+vimp <- vimp[order(-abs(vimp$VIMP)), ]
+cat("\n=== VARIABLE IMPORTANCE ===\n")
+print(vimp, row.names=FALSE)
+write.csv(vimp, "logs/rsf_vimp.csv", row.names=FALSE)
+
+# Barplot
+p <- ggplot(vimp, aes(x=reorder(Factor, VIMP), y=VIMP, fill=VIMP>0)) +
+    geom_col() + coord_flip() + theme_minimal() +
+    geom_hline(yintercept=0, linetype="dashed") +
+    scale_fill_manual(values=c("TRUE"="steelblue","FALSE"="grey70")) +
+    labs(title="RSF Variable Importance", x="", y="VIMP")
+ggsave("figures/rsf_vimp.png", p, width=7, height=5)
+
+# KM by top factor
+top <- vimp$Factor[which.max(abs(vimp$VIMP))]
+med <- median(rf_data[[top]], na.rm=TRUE)
+rf_data$group <- ifelse(rf_data[[top]] > med, "High", "Low")
+fit <- survfit(Surv(time, status) ~ group, data=rf_data)
+p <- ggsurvplot(fit, pval=TRUE, risk.table=TRUE, title=paste("RSF —", top))
+png(paste0("figures/km_rsf_", top, ".png"), width=8, height=6, units="in", res=300)
+print(p); dev.off()
+```
+
+**🧠 What you're doing:** Building 1000 random survival trees (a "forest") that vote on each patient's risk. Each tree looks at a random subset of factors. The importance score tells you which factors matter most for prediction.
+
+**🎯 Why:** RSF is a robustness check. If the same factors that were borderline significant in Cox are also the top 3 in RSF, that's converging evidence. If RSF picks completely different factors, there may be non-linear effects Cox missed.
+
+---
+
+## Step 6.4: Add Somatic Mutation Data
+
+### Why this step?
+
+Breast cancer has key driver mutations: TP53 (often Basal), PIK3CA (often Luminal), GATA3, MAP3K1, CDH1. These mutations are the root cause of the molecular changes MOFA detects. A factor might represent "TP53-mutant" biology — adjusting for TP53 status tells you if the factor is independent.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(data.table)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+
+# Try to load pre-downloaded mutation matrix
+mut_file <- "Data/brca_mutation_matrix.rds"
+if (file.exists(mut_file)) {
+    mutation_aligned <- readRDS(mut_file)
+    cat("Loaded existing mutation matrix\n")
+} else {
+    # Check for MC3 MAF file
+    maf_files <- list.files("Data/TCGA.BRCA.sampleMap/", pattern="mc3|maf", ignore.case=TRUE)
+    if (length(maf_files) > 0) {
+        maf <- fread(file.path("Data/TCGA.BRCA.sampleMap", maf_files[1]))
+        maf$patient <- str_sub(maf$Tumor_Sample_Barcode, 1, 12)
+
+        driver_genes <- c("TP53", "PIK3CA", "GATA3", "MAP3K1", "CDH1",
+                          "PTEN", "AKT1", "RB1", "NF1", "FOXA1")
+        maf_drivers <- maf[maf$Hugo_Symbol %in% driver_genes, ]
+        mutations <- unique(maf_drivers[, .(patient, Hugo_Symbol)])
+        mutations$mutated <- 1
+        mut_mat <- dcast(mutations, patient ~ Hugo_Symbol, value.var="mutated", fill=0)
+
+        common <- intersect(mut_mat$patient, rownames(clinical_mat))
+        rownames(mut_mat) <- mut_mat$patient
+        mutation_aligned <- mut_mat[common, driver_genes, drop=FALSE]
+        saveRDS(mutation_aligned, mut_file)
+    } else {
+        cat("No mutation data found. Create placeholder or download MC3 from UCSC Xena.\n")
+        mutation_aligned <- NULL
+    }
+}
+
+if (!is.null(mutation_aligned)) {
+    factor_scores <- get_factors(mofa_trained)[[1]]
+    colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+    os_time <- as.numeric(ifelse(clinical_mat$vital_status=="DECEASED", clinical_mat$days_to_death, clinical_mat$days_to_last_followup))
+    os_event <- ifelse(clinical_mat$vital_status=="DECEASED", 1, 0)
+
+    common <- intersect(rownames(mutation_aligned), rownames(factor_scores))
+    mut <- mutation_aligned[common, colSums(mutation_aligned[common,]) > 5, drop=FALSE]
+    cox_data <- cbind(data.frame(os_time=os_time[common], os_event=os_event[common]),
+                      scale(factor_scores[common,]), mut)
+    cat("Mutation Cox:", nrow(cox_data), "patients\n")
+
+    mut_genes <- setdiff(names(mut), names(factor_scores))
+    results <- data.frame()
+    for (f in paste0("Factor", 1:15)) {
+        fmla <- as.formula(paste0("Surv(os_time, os_event) ~ `", f, "` + ", paste(mut_genes, collapse=" + ")))
+        cox <- tryCatch(coxph(fmla, data=cox_data), error=function(e) NULL)
+        if (is.null(cox)) next
+        s <- summary(cox)
+        results <- rbind(results, data.frame(Factor=f, HR=exp(coef(cox))[1], p_value=coef(s)[1,"Pr(>|z|)"]))
+    }
+    results$p_adj <- p.adjust(results$p_value, method="BH")
+    cat("\n=== COX ADJUSTED FOR MUTATIONS ===\n")
+    print(results, row.names=FALSE)
+    write.csv(results, "logs/cox_with_mutations.csv", row.names=FALSE)
+}
+```
+
+**🧠 What you're doing:** Loading mutation data for breast cancer driver genes (TP53, PIK3CA, etc.) and re-running the Cox analysis with each factor adjusted for mutation status. Also tests if factors interact with TP53.
+
+**🎯 Why:** In BRCA, TP53 mutations are common in Basal tumors (~80%) but rare in LumA (~10%). If a factor is significant but becomes non-significant after adding TP53 status, it was just a proxy for subtype. If it remains significant, it has independent prognostic value.
+
+---
+
+## Step 6.5: Nomogram with Bootstrap Validation
+
+### Why this step?
+
+A nomogram is a 1-page scoring tool: "Factor score + age + stage + mutation status = predicted survival." Bootstrap validation (1000 repetitions) tells you how accurate this model would be on new patients — essential for any clinical claim.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(rms)
+library(glmnet)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+clinical_mat <- as.data.frame(colData(mae))
+
+factor_scores <- get_factors(mofa_trained)[[1]]
+colnames(factor_scores) <- paste0("Factor", 1:ncol(factor_scores))
+os_time <- as.numeric(ifelse(clinical_mat$vital_status=="DECEASED", clinical_mat$days_to_death, clinical_mat$days_to_last_followup))
+os_event <- ifelse(clinical_mat$vital_status=="DECEASED", 1, 0)
+age <- as.numeric(clinical_mat$age_at_diagnosis)
+stage <- ifelse(grepl("III|IV", clinical_mat$pathologic_stage), "Late", "Early")
+
+# LASSO to select top factors
+cv_fit <- cv.glmnet(scale(factor_scores), Surv(os_time, os_event), family="cox", alpha=1, nfolds=10)
+selected <- names(which(as.matrix(coef(cv_fit, s="lambda.1se")) != 0))
+if (length(selected) == 0) {
+    selected <- names(which(as.matrix(coef(cv_fit, s="lambda.min")) != 0))
+}
+cat("Nomogram factors:", paste(selected, collapse=", "), "\n")
+
+if (length(selected) > 0) {
+    nom_data <- data.frame(os_time, os_event, age, stage=factor(stage),
+                           scale(factor_scores[, selected, drop=FALSE]))
+    nom_data <- nom_data[complete.cases(nom_data), ]
+    dd <- datadist(nom_data); options(datadist="dd")
+
+    fmla <- as.formula(paste("Surv(os_time, os_event) ~ age + stage +",
+                              paste(selected, collapse=" + ")))
+    cox_nom <- cph(fmla, data=nom_data, surv=TRUE, x=TRUE, y=TRUE)
+
+    nom <- nomogram(cox_nom, fun=list(
+        function(x) 1-surv(365, x), function(x) 1-surv(365*3, x)),
+        funlabel=c("1-Year Risk","3-Year Risk"))
+    png("figures/nomogram.png", width=12, height=8, units="in", res=300)
+    plot(nom, xfrac=0.35); dev.off()
+    cat("Saved nomogram\n")
+
+    val <- validate(cox_nom, method="boot", B=500, dxy=TRUE)
+    cat("C-index:", round((val["Dxy","index.corrected"]/2)+0.5, 3), "\n")
+    cat("Slope shrinkage:", round(val["slope","index.corrected"], 3), "\n")
+}
+```
+
+**🧠 What you're doing:** Building a clinical prediction chart. Add up points for age, stage, and the LASSO-selected factors. The total maps to a 1-year and 3-year survival probability. Bootstrap validates the C-index (discrimination) and calibration (accuracy).
+
+**🎯 Why:** A nomogram is the most publication-ready output. If the C-index > 0.70 and the calibration curve follows the 45° line, this is a clinically useful model that could be presented to doctors. The slope shrinkage tells you if you're overfitting (shrinkage < 0.8 = too complex).
+
+---
+
+## Step 6.6: External GEO Validation
+
+This step is identical to LUSC. Seeks external BRCA cohorts with RNA expression + survival data to validate that your MOFA factors predict survival in independent patients.
+
+```
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/hp/AppData/Local/Programs/Python/Python312/python.exe")
+setwd("C:/Users/hp/Dev/playground/PO3")
+library(stringr)
+library(MultiAssayExperiment)
+library(MOFA2)
+library(survival)
+library(GEOquery)
+
+mae <- readRDS("Data/brca_mae.rds")
+mofa_trained <- readRDS("models/brca_mofa_trained.rds")
+
+weights_rna <- get_weights(mofa_trained, views="RNA")[["RNA"]]
+cat("RNA weights:", nrow(weights_rna), "genes x", ncol(weights_rna), "factors\n")
+
+geo_cohorts <- c("GSE20685", "GSE21653", "GSE7390")  # Large BRCA cohorts with survival
+validation <- data.frame()
+
+for (gse_id in geo_cohorts) {
+    cat("\nProcessing", gse_id, "...\n")
+    gse <- tryCatch(getGEO(gse_id, GSEMatrix=TRUE, getGPL=FALSE), error=function(e) NULL)
+    if (is.null(gse)) { cat("Failed\n"); next }
+
+    expr <- exprs(gse[[1]])
+    clin <- pData(gse[[1]])
+    cat("Expression:", nrow(expr), "x", ncol(expr), "\n")
+
+    overlap <- intersect(rownames(expr), rownames(weights_rna))
+    cat("Overlap:", length(overlap), "\n")
+    if (length(overlap) < 100) { cat("Too few genes\n"); next }
+
+    geo_scores <- t(scale(t(as.matrix(expr[overlap,])))) %*% weights_rna[overlap,]
+    colnames(geo_scores) <- paste0("Factor", 1:ncol(geo_scores))
+
+    # Extract survival (varies by GEO — adjust based on actual columns)
+    cat("Clinical columns:", names(clin)[1:10], "\n")
+
+    write.csv(geo_scores, paste0("logs/geo_scores_", gse_id, ".csv"))
+    cat("Factor scores saved. Manually check survival columns and re-run Cox.\n")
+}
+```
+
+**🧠 What you're doing:** Projecting the MOFA factor weights onto external breast cancer gene expression datasets. This estimates what factor scores those patients would have had, then tests if the scores predict their survival.
+
+**🎯 Why:** TCGA-BRCA comes primarily from US academic centers. External cohorts (from Europe, Asia) capture different populations and treatment practices. If your factors validate across all cohorts, they reflect fundamental breast cancer biology, not dataset bias.
+
+---
+
+## Project Structure
+
+```
+C:/Users/hp/Dev/playground/PO3/
+├── Data/
+│   ├── TCGA.BRCA.sampleMap/
+│   │   ├── HiSeqV2_PANCAN.gz (RNA)
+│   │   ├── HumanMethylation450.gz
+│   │   ├── Gistic2_CopyNumber_Gistic2_all_data_by_genes.gz (CNV)
+│   │   ├── RPPA* (proteomics)
+│   │   └── BRCA_clinicalMatrix
+│   ├── brca_mae.rds
+│   └── brca_mutation_matrix.rds (after Step 6.4)
+├── models/
+│   ├── brca_mofa2.hdf5
+│   └── brca_mofa_trained.rds
+├── figures/
+│   ├── km_* (survival curves)
+│   ├── rsf_vimp.png
+│   ├── nomogram.png
+│   └── combined_figure.png
+├── logs/
+│   ├── preprocessing_summary.csv
+│   ├── cox_os.csv
+│   ├── cox_rfs.csv
+│   ├── cox_continuous_os.csv
+│   ├── cox_adjusted_clinical_os.csv
+│   ├── cox_by_subtype.csv
+│   ├── rsf_vimp.csv
+│   ├── cox_with_mutations.csv
+│   └── geo_scores_*.csv
+├── Results/
+│   └── brca_factor*_plots.pdf
+└── scripts/
+    └── (step*.R — saved for convenience)
+```
+
+---
+
+## Summary Table
+
+| Step | Question | Why BRCA is different from LUSC |
+| --- | --- | --- |
+| 1–4 | Data prep + MOFA training | 4 omics (incl. RPPA), ~700 patients vs 370 |
+| 5.1 | Do factors predict OS? | More power, but BRCA patients live longer |
+| 5.2 | Do factors predict RFS? | NEW — not in LUSC. More sensitive endpoint |
+| 6.1 | Can LASSO + adjustment help? | Age + Stage are stronger predictors in BRCA |
+| 6.2 | Subtype-specific signals? | 5 well-defined PAM50 subtypes (LUSC had 4) |
+| 6.3 | RSF robustness? | Larger cohort = more reliable importance |
+| 6.4 | Mutation-adjusted? | PIK3CA > TP53 in Luminal; TP53 > PIK3CA in Basal |
+| 6.5 | Clinical tool? | More events = more stable nomogram |
+| 6.6 | External validation? | Many more BRCA GEO cohorts than LUSC |
+
+---
+
+## Troubleshooting Guide (BRCA-Specific)
+
+| Problem | Solution |
+| --- | --- |
+| RPPA file not found | Check `Data/TCGA.BRCA.sampleMap/` — may need manual download. File should match `*RPPA*` |
+| PAM50 subtype missing | Try `clinical_mat$BRCA_Subtype_PAM50` or `PAM50`. BRCA clinicalMatrix may use different column names |
+| Breast cancer is hormone-driven. Should I add ER/PR/HER2 status to Cox? | Yes — add `ER_Status`, `PR_Status`, `HER2_Final_Status` as covariates if available |
+| Recurrence data not found | BRCA in Xena may use `days_to_recurrence` or `days_to_tumor_progression`. Check column names with \`grep("recur |
+| Too many patients with no RPPA data | Filter to only patients with all 4 omics (Step 1.2). If < 400, consider dropping RPPA for more power |
+| MOFA training slower than LUSC | 4 views + more patients = 2-3× slower. Allow 30-60 min. Use `convergence_mode = "fast"` |
+| GEO validation fails | Try GSE20685 (largest BRCA with survival) manually first. Download from GEO website if `getGEO()` fails |
+
+---
+
+### Step 2.2 Fix (May 2026)
+
+Replace the **Step 2.2** code block with this corrected version:
+
+```rsrc
+# RNA: keep top 8000 most variable genes
+gene_vars <- apply(rna_mat, 1, var, na.rm = TRUE)
+rna_top8k <- rna_mat[head(order(gene_vars, decreasing = TRUE), min(8000, length(gene_vars))), ]
+
+# Methylation: keep top 8000 most variable probes
+meth_vars <- apply(meth_imputed, 1, var, na.rm = TRUE)
+meth_top8k <- meth_imputed[head(order(meth_vars, decreasing = TRUE), min(8000, length(meth_vars))), ]
+
+# CNV: keep top 3000 most variable genes (CNV is less dense)
+cnv_vars <- apply(cnv_mat, 1, var, na.rm = TRUE)
+cnv_top3k <- cnv_mat[head(order(cnv_vars, decreasing = TRUE), min(3000, length(cnv_vars))), ]
+
+# RPPA: keep all (~200 proteins) — already low-dimensional
+cat("RNA:", nrow(rna_top8k), "Methyl:", nrow(meth_top8k), "CNV:", nrow(cnv_top3k), "RPPA:", nrow(rppa_mat), "\n")
+```
+
+**Why:** The original `names(sort(...))` used name-based indexing which fails if rownames contain duplicates or if there are fewer than `n` features. `order()` uses integer indexing, and `min(n, length(vars))` prevents out-of-bounds when the matrix has fewer rows than requested.

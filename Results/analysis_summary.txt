@@ -1,0 +1,40 @@
+TCGA-BRCA MOFA2 — Analysis Summary
+====================================
+
+Patients: 
+Features: 12513 
+Omics: RNA, Methyl, CNV, RPPA 
+MOFA Factors: 15 
+
+--- Variance Explained ---
+Factor1: 990.6%, 1068.3%, 512.2% (total: 2571.1%)
+Factor2: 889.5%, 429.8%, 826.4% (total: 2145.7%)
+Factor3: 13.4%, 1120.2%, 14.4% (total: 1148%)
+Factor4: 17.9%, 815.9%, 36.6% (total: 870.4%)
+Factor5: 322.6%, 391.7%, 81.9% (total: 796.2%)
+Factor6: 662.3%, 0.4%, 6.7% (total: 669.4%)
+Factor7: 271.5%, 88.7%, 149.4% (total: 509.5%)
+Factor8: 169.6%, 199.6%, 72% (total: 441.2%)
+Factor9: 256.3%, 75.1%, 43.6% (total: 374.9%)
+Factor10: 285.4%, 14.6%, 35.1% (total: 335.1%)
+Factor11: 4.8%, 219.3%, 21.6% (total: 245.7%)
+Factor12: 6.1%, 169.2%, 13.2% (total: 188.4%)
+Factor13: 0.2%, 111.7%, 69.3% (total: 181.2%)
+Factor14: 7.1%, 159.1%, 1.8% (total: 168.1%)
+Factor15: 5.9%, 136.5%, 22% (total: 164.4%)
+
+--- Significant Factors (OS, p.adj<0.05) ---
+  None at p.adj<0.05
+
+--- Time-dependent AUC (all factors combined) ---
+1 Year: AUC=0.4199 [NA-NA]
+3 Years: AUC=0.7047 [NA-NA]
+5 Years: AUC=0.6130 [NA-NA]
+
+--- Top 3 RSF Variable Importance ---
+Factor14: 0.0194
+Factor12: 0.0094
+Factor5: 0.0072
+
+--- RMST (5-year, per factor) ---
+Factor7: diff=95.6 days [0.6-190.5] p=0.0486 *

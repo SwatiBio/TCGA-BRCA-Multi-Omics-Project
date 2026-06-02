@@ -1,0 +1,4 @@
+"Timepoint","Days","AUC","CI_lower","CI_upper"
+"1 Year",365,0.4199,NA,NA
+"3 Years",1095,0.7047,NA,NA
+"5 Years",1825,0.613,NA,NA

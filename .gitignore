@@ -1,0 +1,17 @@
+# R / RStudio
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Python cache (scripting)
+__pycache__/
+*.pyc

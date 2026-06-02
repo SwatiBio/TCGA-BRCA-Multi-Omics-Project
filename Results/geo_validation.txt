@@ -1,0 +1,9 @@
+GEO Validation Results
+======================
+
+Dataset: GSE20685 (breast cancer)
+Platform: GPL570 
+Probes in annotation: 45118 
+Unique genes mapped: 21747 
+Top 500 TCGA genes used
+Overlap with GEO: 0 
