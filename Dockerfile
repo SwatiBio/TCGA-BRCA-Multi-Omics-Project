@@ -1,9 +1,6 @@
-FROM rocker/r-ver:4.3.2
+FROM rocker/shiny-verse:4.3.2
 
 RUN apt-get update && apt-get install -y \
-    libcurl4-openssl-dev \
-    libssl-dev \
-    libxml2-dev \
     libfontconfig1-dev \
     libcairo2-dev \
     libxt-dev \
@@ -12,9 +9,10 @@ RUN apt-get update && apt-get install -y \
 COPY install_packages.R /tmp/install_packages.R
 RUN Rscript /tmp/install_packages.R
 
+COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
+
 COPY dashboard_app /srv/shiny-server
-COPY run.R /srv/shiny-server/run.R
 
 EXPOSE 7860
 
-CMD ["Rscript", "/srv/shiny-server/run.R"]
+CMD ["/usr/bin/shiny-server"]
