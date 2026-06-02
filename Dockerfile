@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dev httpuv for WebSocket reliability
-RUN installGithub.r rstudio/httpuv
+RUN install2.r --error --skipinstalled remotes && installGithub.r rstudio/httpuv
 
 # Install CRAN packages
 RUN install2.r --error --skipinstalled \
