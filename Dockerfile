@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y \
 # Install dev httpuv for WebSocket reliability
 RUN install2.r --error --skipinstalled remotes && installGithub.r rstudio/httpuv
 
-# Install CRAN packages
-RUN install2.r --error --skipinstalled \
+# Install CRAN packages (no --skipinstalled: force-consistency with pre-installed pkgs)
+RUN install2.r --error \
+    shiny \
     bs4Dash \
     shinyjs \
     plotly \
