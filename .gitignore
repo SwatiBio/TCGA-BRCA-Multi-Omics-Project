@@ -15,3 +15,7 @@ Thumbs.db
 # Python cache (scripting)
 __pycache__/
 *.pyc
+
+# Large raw data files (not needed by the Shiny app)
+Data/GEO/
+Data/brca_raw.rds
