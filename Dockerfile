@@ -35,7 +35,23 @@ COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 
 RUN chown -R shiny:shiny /srv/shiny-server
 
-# Simulate Shiny Server sourcing app.R (same CWD as Shiny Server)
+# Inject debug logging into server function (minimal, reversible change in COPY only)
+RUN Rscript -e "\
+  src <- readLines('/srv/shiny-server/app.R'); \
+  server_start <- grep(\"^server <- function\", src); \
+  cat('=== Server function at line', server_start, '===\n'); \
+  debug_lines <- c( \
+    '  try(cat(format(Sys.time()), \"- SERVER STARTED\\n\", file = \"/srv/shiny-server/www/debug.txt\"))', \
+    '  options(shiny.error = function() {', \
+    '  try(cat(format(Sys.time()), \"- REACTIVE ERROR:\", geterrmessage(), \"\\n\",', \
+    '        file = \"/srv/shiny-server/www/debug.txt\", append = TRUE))', \
+    '  })' \
+  ); \
+  src <- append(src, debug_lines, after = server_start); \
+  writeLines(src, '/srv/shiny-server/app.R'); \
+  cat('=== DEBUG LINES INJECTED ===\n'); \
+  cat('Resulting server line:', grep(\"^server <- function\", src, value=TRUE), '\n')"
+
 RUN Rscript -e "\
   setwd('/srv/shiny-server'); \
   cat('CWD:', getwd(), '\n'); \
@@ -49,24 +65,6 @@ RUN Rscript -e "\
     cat('shinyApp class:', paste(class(obj), collapse=', '), '\n'); \
   }, error = function(e) { \
     cat('!!! SOURCE ERROR:', conditionMessage(e), '\n'); \
-    q(status=1, save='no'); \
-  })"
-
-# Test server function in mock session (catches initialization crashes)
-RUN Rscript -e "\
-  setwd('/srv/shiny-server'); \
-  source('app.R', local=TRUE); \
-  cat('=== TESTING SERVER FUNCTION ===\n'); \
-  tryCatch({ \
-    shiny::testServer(server, { \
-      cat('INSIDE testServer: rv selected_factor =', rv[['selected_factor']], '\n'); \
-      cat('INSIDE testServer: cox_data rows =', nrow(rv[['cox_data']]), '\n'); \
-      cat('=== SERVER FUNCTION REACTIVE VALUES OK ===\n'); \
-    }); \
-    cat('=== testServer COMPLETED SUCCESSFULLY ===\n'); \
-  }, error = function(e) { \
-    cat('!!! testServer FAILED:', conditionMessage(e), '\n'); \
-    cat('!!! Full error:', capture.output(str(e)), '\n'); \
     q(status=1, save='no'); \
   })"
 
