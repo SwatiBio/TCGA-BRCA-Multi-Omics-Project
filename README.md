@@ -2,15 +2,15 @@
 
 [![Live App](https://img.shields.io/badge/Live%20App-Shiny-1976D2?logo=rstudio)](https://arcturex.shinyapps.io/brca-navigator/)
 
-**Discovering multi-omics latent factors linked to breast cancer survival** — integrating RNA-seq, DNA methylation, CNV, and RPPA proteomics from TCGA-BRCA (n=636) using MOFA2.
+**Discovering multi-omics latent factors linked to breast cancer survival** by integrating RNA-seq, DNA methylation, CNV, and RPPA proteomics from TCGA-BRCA (n=636) using MOFA2.
 
 ---
 
 ## Key Findings
 
 - **15 latent factors** discovered; Factors 1 + 2 explain 47% of coordinated variation across omics
-- **Factor 5** (anti-tumor immune response — PLA2G2D, TIGIT, ICOS, ZAP70): HR=0.63 [0.46–0.87], p=0.004 after age/stage adjustment
-- **Factor 7**: +95.6 days restricted mean survival time (RMST) in high vs low group — a "delayed protection" signal invisible to Cox models
+- **Factor 5** (anti-tumor immune response-PLA2G2D, TIGIT, ICOS, ZAP70): HR=0.63 [0.46–0.87], p=0.004 after age/stage adjustment
+- **Factor 7**: +95.6 days restricted mean survival time (RMST) in high vs low group which is a "delayed protection" signal invisible to Cox models
 - **Factor 14**: strongest RSF variable importance (3× next best), top risk factor
 - **Time-dependent AUC**: 0.705 at 3 years; cross-method consistency (Cox, RSF, RMST, KM, TimeROC)
 
@@ -22,7 +22,7 @@
 
 ## Interactive Dashboard
 
-**[brca-navigator](https://arcturex.shinyapps.io/brca-navigator/)** — a Shiny app built with bs4Dash + plotly + visNetwork, deployed on shinyapps.io. Seven tabs:
+**[brca-navigator](https://arcturex.shinyapps.io/brca-navigator/)** :- a Shiny app built with bs4Dash + plotly + visNetwork, deployed on shinyapps.io. Seven tabs:
 
 | Tab | Purpose |
 |-----|---------|
