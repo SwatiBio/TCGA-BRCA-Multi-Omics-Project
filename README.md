@@ -18,21 +18,7 @@
 
 ---
 
-## Pipeline
 
-| Step | Script | Description |
-|------|--------|-------------|
-| **1. Download** | `step1_download_brca.R` | TCGA-BRCA data from UCSC Xena (RNA-seq, 450K methylation, Gistic2 CNV, RPPA, clinical) |
-| **2. Preprocess** | `step2_build_mae.R` | KNN imputation, top-feature selection (RNA: 8k, Methyl: 8k, CNV: 3k), patient alignment, MultiAssayExperiment |
-| **3. MOFA** | `step3_train_mofa.R` | MOFA2 with 15 factors, seed=42, maxiter=1000, fast convergence |
-| **4. Exploration** | `step4_exploration.R` | Variance explained, top weights, PAM50 subtype distribution, GO/KEGG enrichment |
-| **5. Survival** | `step5_survival.R` | Univariate Cox OS/RFS, Kaplan-Meier curves |
-| **6. Advanced** | `step6.*.R` | Multivariable Cox (LASSO + age/stage), Random Survival Forest (1000 trees), TimeROC (1/3/5yr), RMST (5yr), GSEA, external GEO validation |
-| **Summary** | `generate_all_outputs.R` + `summary_figures.R` | CSV results, analysis summary, publication-ready figures |
-
-> **Note:** CNV was dropped during QC (0 features survived filtering). External validation (GSE20685, Affymetrix microarray) could not map probes to TCGA RNA-seq gene symbols.
-
----
 
 ## Interactive Dashboard
 
@@ -50,46 +36,7 @@
 
 ---
 
-## Reproducibility
 
-### Requirements
-
-- **R 4.2+** with: MultiAssayExperiment, MOFA2, ggplot2, ComplexHeatmap, survival, survminer, glmnet, ranger, timeROC, survRM2, clusterProfiler, UCSCXenaTools, impute, data.table, patchwork, GEOquery
-- **Python 3.12+** with: mofapy2 (via pip, used by MOFA2 via reticulate)
-- **Bioconductor** packages installed via `BiocManager::install()`
-
-### Run the Pipeline
-
-```r
-setwd("path/to/PO3")
-# Set Python path for reticulate:
-# Sys.setenv(RETICULATE_PYTHON = "path/to/python.exe")
-
-source("scripts/step1_download_brca.R")   # ~10 min
-source("scripts/step2_build_mae.R")        # ~5 min
-source("scripts/step3_train_mofa.R")       # ~30–60 min
-source("scripts/step4_exploration.R")
-source("scripts/step5_survival.R")
-source("scripts/step6.1_continuous_cox.R")
-source("scripts/step6.2_rsf.R")
-source("scripts/step6.3_timeroc.R")
-source("scripts/step6.4_rmst.R")
-source("scripts/step6.5_gsea.R")
-source("scripts/step6.6_validation.R")     # may fail (see note)
-source("scripts/generate_all_outputs.R")
-source("scripts/summary_figures.R")
-```
-
-### Dashboard
-
-```r
-source("dashboard_app/data_prep.R")  # once
-# Open dashboard_app/app.R in RStudio → Run App
-# Or deploy:
-# rsconnect::deployApp(appDir = "dashboard_app", appName = "brca-navigator")
-```
-
----
 
 ## Directory Structure
 
