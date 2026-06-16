@@ -143,4 +143,7 @@ source("dashboard_app/data_prep.R")  # once
 
 ## License
 
-This project is for educational and research purposes. TCGA data is available under [TCGA publication guidelines](https://www.cancer.gov/about-nci/organization/ccg/research/structural-genomics/tcga/using-tcga/citing-tcga).
+This work is licensed under CC BY-NC-ND 4.0. See `LICENSE` for details.
+Copyright (c) 2026 Swati. All rights reserved.
+
+TCGA data used in this project is available under [TCGA publication guidelines](https://www.cancer.gov/about-nci/organization/ccg/research/structural-genomics/tcga/using-tcga/citing-tcga).
