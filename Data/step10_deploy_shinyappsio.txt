@@ -1,0 +1,78 @@
+== Step 10: Deploy to shinyapps.io ==
+
+Instead of the complex Docker/Hugging Face Spaces approach, we now deploy to shinyapps.io — RStudio's native Shiny hosting. It's one-click from RStudio and doesn't need Docker, Dockerfile, or any WebSocket workarounds.
+
+
+== 10.1 Clean up HF files ==
+
+Before deploying, remove all Hugging Face-specific files from the repo:
+  - Dockerfile
+  - shiny-server.conf
+  - install_packages.R
+  - dashboard_app/packages.R
+  - .github/workflows/sync-to-hub.yml
+  - Docker/ directory
+  - README.md YAML frontmatter (sdk: docker, etc.)
+  - HF git remote: git remote remove hf
+
+Also delete the HF Space from huggingface.co website, and remove HF_TOKEN from GitHub secrets.
+
+
+== 10.2 Create shinyapps.io account ==
+
+1. Go to https://www.shinyapps.io
+2. Sign up (free tier: 25 active hours per month, app sleeps after 15 min idle)
+3. Verify email
+4. Log in, go to Account > Tokens
+5. Show your token and copy it
+
+
+== 10.3 Install rsconnect in RStudio ==
+
+Run in RStudio console:
+  install.packages("rsconnect")
+  library(rsconnect)
+  rsconnect::setAccountInfo(
+    name = "YOUR_ACCOUNT_NAME",
+    token = "YOUR_TOKEN",
+    secret = "YOUR_SECRET"
+  )
+
+Replace with your actual account name, token, and secret from step 10.2.
+
+
+== 10.4 Deploy the app ==
+
+Method A — From RStudio (easiest):
+  1. Open dashboard_app/app.R in the editor
+  2. Click the blue "Publish" icon next to the Run App button
+  3. Select "ShinyApps.io" as destination
+  4. Set app name to "brca-navigator"
+  5. Click Publish
+
+Method B — From R console:
+  rsconnect::deployApp(
+    appDir = "C:/Users/hp/Dev/playground/PO3/dashboard_app",
+    appName = "brca-navigator",
+    appTitle = "BRCA Navigator"
+  )
+
+The deployment uploads app.R, custom.css, data/ files, and all needed R packages. No Dockerfile needed.
+
+
+== 10.5 Verify ==
+
+Your app will be live at:
+  https://YOURNAME.shinyapps.io/brca-navigator/
+
+Test all tabs: The Story, Factor Explorer, Patient Map, Gene Explorer, Survival Simulator, Analysis Flow, About.
+
+Note: On the free tier, the app sleeps after 15 minutes of inactivity. The first visit after sleep takes ~10 seconds to wake up.
+
+
+== 10.6 Update app.R if needed ==
+
+Make sure the data_dir logic at line 26 handles the deployment path correctly. The current code is:
+  data_dir <- if (dir.exists("data")) "data" else file.path(dirname(getwd()), "dashboard_app/data")
+
+shinyapps.io sets the working directory to the app directory, so dir.exists("data") should be TRUE.
